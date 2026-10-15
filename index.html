@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bitácora de Combustible</title>
+<meta name="description" content="Bitácora diaria de millas y diésel por camión, con reporte trimestral de fuel taxes en PDF.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Kalam:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+<div id="authScreen" class="auth" hidden>
+  <form id="authForm" class="authbox" novalidate>
+    <h1>Bitácora de <span>Combustible</span></h1>
+    <p id="authMsg" class="authmsg">Entra con el correo y la contraseña que te dio el administrador.</p>
+    <label class="fld" for="authEmail">Correo<input type="email" id="authEmail" autocomplete="email" required></label>
+    <label class="fld" for="authPass">Contraseña<input type="password" id="authPass" autocomplete="current-password" required minlength="6"></label>
+    <button class="btn primary big" type="submit" id="authBtn">Entrar</button>
+    <button class="linkbtn" type="button" id="authForgot">Olvidé mi contraseña</button>
+    <div id="authErr" class="tdstatus err" role="alert"></div>
+  </form>
+</div>
+<div class="wrap">
+  <header class="app">
+    <div class="brand">
+      <h1>Bitácora de <span>Combustible</span></h1>
+      <p>Millas diarias, cargas de diésel y reporte trimestral de fuel taxes</p>
+    </div>
+    <div class="pick">
+      <div class="userbox" id="userBox" hidden><span id="who"></span><button class="linkbtn" type="button" id="logout">Salir</button></div>
+      <label class="fld" for="truckSel">Camión<select id="truckSel"></select></label>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="log" aria-selected="true">Hoja mensual</button>
+    <button role="tab" data-tab="today" aria-selected="false">Hoy</button>
+    <button role="tab" data-tab="report" aria-selected="false">Reporte de fuel taxes</button>
+    <button role="tab" data-tab="import" aria-selected="false">Subir hojas</button>
+    <button role="tab" data-tab="trucks" aria-selected="false">Camiones</button>
+  </nav>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <section id="tab-today" hidden>
+    <div class="today-wrap">
+      <form id="todayForm" class="today" novalidate>
+        <div class="tgrid">
+          <label class="fld" for="tdDate">Fecha<input type="date" id="tdDate" required></label>
+          <label class="fld" for="tdDriver">Chofer<input id="tdDriver" autocomplete="name"></label>
+        </div>
+        <label class="toggle" for="tdOff"><input type="checkbox" id="tdOff"> No trabajé este día (off duty)</label>
+        <fieldset id="tdMilesBox">
+          <legend>Millas</legend>
+          <label class="fld" for="tdOdo">Odómetro del tablero al terminar el día<input id="tdOdo" class="big" inputmode="numeric" autocomplete="off" placeholder="1,106,622"></label>
+          <div class="calcline" id="tdMiles"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Diésel</legend>
+          <label class="toggle" for="tdFuel"><input type="checkbox" id="tdFuel"> Cargué diésel este día</label>
+          <div id="tdFuelBox" hidden>
+            <div class="tgrid">
+              <label class="fld" for="tdGal">Galones<input id="tdGal" class="big" inputmode="decimal" autocomplete="off" placeholder="109.409"></label>
+              <label class="fld" for="tdPrice">Precio por galón<input id="tdPrice" class="big" inputmode="decimal" autocomplete="off" placeholder="4.599"></label>
+              <label class="fld" for="tdCost">Total pagado<input id="tdCost" class="big" inputmode="decimal" autocomplete="off" placeholder="503.17"></label>
+              <label class="fld" for="tdFuelOdo">Odómetro al cargar<input id="tdFuelOdo" class="big" inputmode="numeric" autocomplete="off"></label>
+            </div>
+            <div class="calcline" id="tdFuelCalc">Con dos de los tres (galones, precio, total) el tercero se calcula.</div>
+          </div>
+        </fieldset>
+        <button class="btn primary big" type="submit" id="tdSave">Guardar el día</button>
+        <div id="tdStatus" class="tdstatus" role="status"></div>
+      </form>
+      <aside class="recent">
+        <h2 class="sec">Últimos días</h2>
+        <div id="tdRecent"></div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-log">
+    <div class="row">
+      <label class="fld" for="monthSel">Mes<input type="month" id="monthSel"></label>
+      <button class="btn" id="dlLog">Descargar hoja (PDF)</button>
+      <button class="btn" id="csvLog">Exportar CSV</button>
+    </div>
+    <div id="logTiles"></div>
+    <div id="logBody"></div>
+    <p class="hint">Llénala como la hoja en papel: en <b>Dashboard miles</b> el odómetro al terminar el día (o escribe <b>OFF DUTY</b>); <b>Total miles driven</b> se calcula solo. Si cargó diésel: <b>Fuel miles</b> es el odómetro al cargar, y con galones y precio se calcula el costo (o con galones y costo, el precio). Enter baja al siguiente día; cada casilla se guarda al salir de ella. Los cambios de aceite y la compañía del encabezado también se pueden escribir.</p>
+  </section>
+
+  <section id="tab-report" hidden>
+    <div class="row">
+      <label class="fld" for="yearSel">Año<input type="number" id="yearSel" min="2000" max="2100" style="width:96px"></label>
+      <label class="fld" for="qSel">Trimestre<select id="qSel"><option value="1">1º (ene–mar)</option><option value="2">2º (abr–jun)</option><option value="3">3º (jul–sep)</option><option value="4">4º (oct–dic)</option></select></label>
+      <label class="fld" for="avgSel">Precio promedio<select id="avgSel"><option value="weighted">Ponderado (costo ÷ galones)</option><option value="simple">Simple (promedio de precios)</option></select></label>
+      <button class="btn primary" id="dlRpt">Descargar reporte (PDF)</button>
+      <button class="btn" id="csvRpt">Exportar CSV</button>
+    </div>
+    <div class="sheet" id="rptBox"></div>
+    <p class="hint">Llena el reporte directo en la hoja: en el renglón rojo de cada mes pon la fecha y dos de los tres valores (costo, galones o precio por galón); el tercero se calcula y la carga se agrega al presionar Enter o Tab. Para corregir, escribe sobre cualquier valor; la × borra la carga. Si de un mes solo tienes los totales, escríbelos en su renglón TOTAL. Las millas del trimestre son el odómetro de cierre menos el de apertura; el odómetro de cierre de un trimestre pasa solo como apertura del siguiente, y el de cierre se toma de la última lectura de la bitácora si no lo escribes.Las cargas que escribas aquí también aparecen en la bitácora diaria. El reporte se descarga en PDF tamaño carta, listo para imprimir o enviar. El promedio ponderado es el precio real pagado por galón; el simple promedia los precios de cada carga, como en la hoja en papel.</p>
+  </section>
+
+  <section id="tab-import" hidden>
+    <div id="impOff" class="banner" hidden></div>
+    <label class="drop" id="impDrop" for="impFile">
+      <b>Sube fotos de tus hojas ya llenas</b>
+      <span>Hoja mensual (Monthly Log Miles) o reporte de fuel taxes. Fotos JPG o PNG; puedes escoger varias a la vez.</span>
+      <input type="file" id="impFile" accept="image/jpeg,image/png,image/webp" multiple>
+      <span class="btn primary" aria-hidden="true">Escoger fotos</span>
+    </label>
+    <div id="impList" class="jobs"></div>
+    <p class="hint">La app lee cada foto con OCR y acomoda los números en sus columnas. Revisa los renglones marcados en amarillo (números que no se pudieron acomodar o que no cuadran con el odómetro), corrige lo que haga falta y presiona <b>Guardar en la hoja</b>. Nada se guarda sin tu revisión. Si tienes un PDF de CamScanner, expórtalo como JPG.</p>
+  </section>
+
+  <section id="tab-trucks" hidden>
+    <div id="truckList"></div>
+    <form class="tf" id="truckForm">
+      <h2 id="tfTitle">Agregar camión</h2>
+      <label class="fld" for="tfNum">Número de camión<input id="tfNum" required placeholder="2021"></label>
+      <label class="fld" for="tfCo">Compañía<input id="tfCo" placeholder="Blackhawk Trans Inc."></label>
+      <label class="fld" for="tfModel">Modelo<input id="tfModel" placeholder="Freightliner Cascadia 2017"></label>
+      <label class="fld" for="tfDriver">Chofer habitual<input id="tfDriver" placeholder="Jr."></label>
+      <label class="fld" for="tfPrevDate">Cambio de aceite anterior<input type="date" id="tfPrevDate"></label>
+      <label class="fld" for="tfPrevOdo">Millas en ese cambio<input type="number" id="tfPrevOdo" inputmode="numeric"></label>
+      <label class="fld" for="tfOilDate">Último cambio de aceite<input type="date" id="tfOilDate"></label>
+      <label class="fld" for="tfOilOdo">Millas en ese cambio<input type="number" id="tfOilOdo" inputmode="numeric"></label>
+      <label class="fld" for="tfInt">Cambiar aceite cada (millas)<input type="number" id="tfInt" value="20000" inputmode="numeric"></label>
+      <div class="actions">
+        <button class="btn primary" type="submit" id="tfSave">Guardar camión</button>
+        <button class="btn" type="button" id="tfCancel" hidden>Cancelar edición</button>
+      </div>
+    </form>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="app.js?v=2"></script>
+</body>
+</html>
