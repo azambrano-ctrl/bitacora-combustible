@@ -1,8 +1,19 @@
 // Supabase Edge Function: sends a photo of a filled sheet to OCR.space and returns the text.
 // The OCR.space key lives in the function's secrets (OCR_SPACE_API_KEY), never in the web page.
-// Only signed-in users can call it: Supabase checks the user's login token before this code runs.
+// Only signed-in users of the app can call it: the user's login token is checked against Supabase Auth.
 
 const OCR_KEY = Deno.env.get("OCR_SPACE_API_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+
+async function isSignedIn(req: Request): Promise<boolean> {
+  const auth = req.headers.get("Authorization") ?? "";
+  if (!auth.startsWith("Bearer ")) return false;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { Authorization: auth, apikey: req.headers.get("apikey") || SUPABASE_ANON_KEY },
+  });
+  return r.ok;
+}
 // Engine 2 reads numbers and symbols best; set OCR_SPACE_ENGINE=3 to try the handwriting engine.
 const OCR_ENGINE = Deno.env.get("OCR_SPACE_ENGINE") ?? "2";
 const MAX_BYTES = 1_000_000; // OCR.space free plan limit per file
@@ -19,6 +30,7 @@ const reply = (body: unknown, status = 200) =>
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return reply({ error: "Usa POST." }, 405);
+  if (!(await isSignedIn(req))) return reply({ error: "Inicia sesión para leer fotos." }, 401);
   if (!OCR_KEY) return reply({ error: "Falta la clave de OCR.space en el servidor (OCR_SPACE_API_KEY)." }, 500);
 
   let image: unknown;
