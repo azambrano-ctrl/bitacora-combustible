@@ -2,7 +2,7 @@
 -- Run this once in Supabase: Dashboard → SQL Editor → New query → paste → Run.
 
 create table if not exists public.docs (
-  collection text not null,              -- 'trucks' | 'entries' | 'months' | 'quarters'
+  collection text not null,              -- 'trucks' | 'entries' | 'months' | 'quarters' | 'sheets' (fingerprints of uploaded photos)
   id         text not null,              -- e.g. '2021_2026-08-15'
   truck      text,                       -- truck id, used to load one truck at a time
   data       jsonb not null,

@@ -665,15 +665,37 @@ IMP.recognize = async (file, engine) => {
 };
 const ENGINE_NAME = {deepseek:'Leído con DeepSeek', paddle:'Leído con PaddleOCR', ocr:'Leído con OCR.space', ocrspace:'Leído con OCR.space', claude:'Leído con Claude', auto:''};
 const ENGINE_CHIP = {deepseek:'ok', paddle:'ok', ocr:'warn', claude:'ok'};
-function addFiles(files){
+// fingerprint of the photo, to notice the same file uploaded twice
+async function fileHash(f){
+  try { const h=await crypto.subtle.digest('SHA-256', await f.arrayBuffer()); return [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join(''); }
+  catch(e){ return null; }
+}
+async function addFiles(files){
   for (const f of files) {
     if (!/^image\//.test(f.type)) { toast(`${f.name}: sube una foto (JPG o PNG), no ${f.type||'este tipo de archivo'}.`); continue; }
+    const hash=await fileHash(f);
+    if (hash && IMP.jobs.some(j=>j.hash===hash)) { toast(`${f.name}: esa foto ya está en la lista.`); continue; }
     // "Comparar": the same photo read by both, side by side, so the better reading can be saved
     const choice=$('#impEngine').value, url=URL.createObjectURL(f);
     for (const engineReq of choice==='compare' ? ['deepseek','paddle'] : [choice])
-      IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq});
+      IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq, hash});
   }
   renderJobs(); pump();
+}
+// Is this sheet already in the system? Same photo saved before, or most of its days already saved with the same numbers.
+async function checkRepeat(j){
+  j.repeat=null;
+  try {
+    if (j.hash && S.db) { const s=await S.db.collection('sheets').doc(j.hash).get();
+      if (s.exists) { const v=s.data(); j.repeat=`Esta misma foto ya se guardó${v.savedAt?' el '+usDate(v.savedAt.slice(0,10)):''}${v.truckNumber?' en truck #'+v.truckNumber:''}${v.ym?' ('+MES[+v.ym.slice(5)-1]+' '+v.ym.slice(0,4)+')':''}.`; return; } }
+    const tid=j.truckId, rows=j.data.rows.filter(r=>r.date && (r.odo!=null || r.gal!=null)); if (!tid || rows.length<2) return;
+    let saved=S.entries;
+    if (tid!==S.truckId) { saved={}; (await S.db.collection('entries').where('truck','==',tid).get()).docs.forEach(d=>{ saved[d.id]=d.data(); }); }
+    const same=rows.filter(r=>{ const e=saved[tid+'_'+r.date]; if (!e) return false;
+      const odoOk = r.odo==null || e.odo==null || Math.abs(e.odo-r.odo)<=10, galOk = r.gal==null || e.gal==null || Math.abs(e.gal-r.gal)<0.5;
+      return odoOk && galOk && ((r.odo!=null && e.odo!=null) || (r.gal!=null && e.gal!=null)); }).length;
+    if (same>=Math.max(2, Math.ceil(rows.length/2))) j.repeat=`Esta hoja parece estar ya guardada: ${same} de ${rows.length} días ya tienen estos mismos datos en truck #${S.trucks[tid]?.number||''}.`;
+  } catch(e){}
 }
 async function pump(){
   if (IMP.busy) return;
@@ -692,7 +714,7 @@ async function pump(){
       job.data=normalize(pos && pos.rows.length ? pos : parseOcr(text));
     }
     if (!job.data.rows.length && !job.data.totals.length) throw new Error('No encontré renglones con datos en la foto. Revisa que se vea la hoja completa y derecha.');
-    job.truckId=truckForSheet(job.data); job.status='review';
+    job.truckId=truckForSheet(job.data); await checkRepeat(job); job.status='review';
   } catch(e){ job.status='error'; job.err=e.message||'No se pudo leer la foto. Presiona Leer otra vez.'; }
   IMP.busy=false; renderJobs(); pump();
 }
@@ -1163,6 +1185,9 @@ function reviewHTML(j){
   const trucks=Object.values(S.trucks);
   const tsel = trucks.length ? `<select id="jt-${j.id}" data-jt="${j.id}">${tid?'':'<option value="" selected>— Escoge el camión —</option>'}${trucks.map(t=>`<option value="${esc(t.id)}"${t.id===tid?' selected':''}>#${esc(t.number)}${t.plate?' · '+esc(t.plate):''}</option>`).join('')}</select>` : '';
   const exists = d.truck && S.trucks[safeId(d.truck)];
+  // another photo of the same truck and month in this list
+  const twin = d.month && IMP.jobs.find(o=>o!==j && o.data && o.hash!==j.hash && ['review','saved'].includes(o.status) && o.truckId===tid && o.data.month===d.month && o.data.year===d.year);
+  const repeat = j.repeat || (twin ? `Ya hay otra foto de esta misma hoja en la lista (${twin.file.name}).` : '');
   const mismatch = !d.truck ? `<span class="chip warn">No encontré el número de camión en la hoja: escógelo</span>`
     : !exists ? `<span class="chip warn">La hoja dice truck #${esc(d.truck)}, que no está registrado</span> ${S.canWrite?`<button class="btn" data-mktruck="${j.id}">Crear truck #${esc(d.truck)}</button>`:''}`
     : tid===safeId(d.truck) ? `<span class="chip ok">Detectado en la hoja: truck #${esc(d.truck)}</span>`
@@ -1184,7 +1209,7 @@ function reviewHTML(j){
   if (d.company || d.newOil || d.lastOil) ex.push(`<label><input type="checkbox" data-j="${j.id}" data-x="header" id="jx-${j.id}-h"${d.headerOn?' checked':''}> Guardar en el camión: ${[d.company&&`compañía ${esc(d.company)}`, d.newOil&&`cambio de aceite ${d.newOil.date?usDate(d.newOil.date):''} @ ${fOdo(d.newOil.odo)}`, d.lastOil&&`cambio anterior ${d.lastOil.date?usDate(d.lastOil.date):''} @ ${fOdo(d.lastOil.odo)}`].filter(Boolean).join(' · ')}</label>`);
   d.totals.forEach((m,k)=>ex.push(`<label><input type="checkbox" data-j="${j.id}" data-x="tot" data-n="${k}" id="jx-${j.id}-t${k}"${m.on?' checked':''}> Total de ${MES[m.m-1]} ${m.y}: ${fMoney(m.cost)} · ${fGal(m.gal)} gal${m.price!=null?' · '+fPrice(m.price):''} <span class="jstat">(solo se usa si ese mes no tiene cargas)</span></label>`));
   if (d.qm) ex.push(`<label><input type="checkbox" data-j="${j.id}" data-x="qm" id="jx-${j.id}-q"${d.qm.on?' checked':''}> Odómetros del trimestre: apertura ${d.qm.startDate?usDate(d.qm.startDate):''} ${fOdo(d.qm.start)} · cierre ${d.qm.endDate?usDate(d.qm.endDate):''} ${fOdo(d.qm.end)}</label>`);
-  return `<div class="jmeta"><div><span class="k">Tipo</span><span class="v">${kind}</span></div>
+  return `${repeat?`<div class="repeat">⚠ Hoja repetida. ${esc(repeat)} Si la guardas otra vez, esos días se sobrescriben.</div>`:''}<div class="jmeta"><div><span class="k">Tipo</span><span class="v">${kind}</span></div>
       ${d.month?`<div><span class="k">Mes</span><span class="v">${MONTH[d.month-1]} ${d.year||''}</span></div>`:''}
       <div><span class="k">Camión de esta hoja</span>${tsel} ${mismatch}</div>
       <div><span class="k">Renglones</span><span class="v">${nOn} a guardar${nWarn?` · <span class="chip warn">${nWarn} por revisar</span>`:''}</span></div></div>
@@ -1232,6 +1257,7 @@ async function saveJob(j){
   }
   const mainMonth = d.month && d.year ? `${d.year}-${pad(d.month)}` : [...months].pop();
   j.view = mainMonth || null;
+  if (j.hash) try { await S.db.collection('sheets').doc(j.hash).set({truck:S.truckId, truckNumber:t.number, ym:mainMonth||null, name:j.file.name, savedAt:new Date().toISOString()}); } catch(e){}
   j.status='saved'; j.savedMsg=`Guardado en truck #${t.number}: ${n} ${n===1?'día':'días'}${months.size?` (${[...months].map(ym=>{const [y,m]=ym.split('-');return MES[+m-1]+' '+y;}).join(', ')})`:''}.`;
   toast(j.savedMsg); renderJobs(); later();
 }
@@ -1437,6 +1463,12 @@ function makeDb(sb){
   const snapOf = rows => { const docs=rows.map(r=>({id:r.id, exists:true, data:()=>r.data})); return {docs, size:docs.length, empty:!docs.length, metadata:{fromCache:false, hasPendingWrites:false}}; };
   function query(collection, filter){
     return {
+      async get(){
+        let q=sb.from(T).select('id,data').eq('collection',collection);
+        if (filter) q=q.eq(filter.field, filter.value);
+        const {data, error}=await q.limit(5000); if (error) throw error;
+        return snapOf(data||[]);
+      },
       onSnapshot(next, error){
         let alive=true, timer=null;
         const load = async () => {
