@@ -782,7 +782,7 @@ function reconcileFuel(pool, kind){
 }
 // ---------- table from word positions (PaddleOCR / OCR.space overlay) ----------
 // Rows come from the printed dates (y), columns from the header words (x); each word goes to the cell it sits in.
-const odoDigits = s => { const d=String(s||'').replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/\D/g,''); return d ? Number(d) : null; };
+const odoDigits = s => { const d=String(s||'').replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/B/g,'8').replace(/S/g,'5').replace(/Z/g,'2').replace(/\D/g,''); return d ? Number(d) : null; };
 function fixOdo(v, ref){
   // compare with a nearby odometer: restore missing leading digits (104,314 → 1,104,314) or drop one extra digit
   if (v==null || ref==null || Math.abs(v-ref)<5000) return v;
@@ -914,7 +914,16 @@ function parseOcr(text){
   if (yr) out.year=+yr[1];
   const sheet={month: out.kind==='monthly_log' ? out.month : null};   // the "2/28 on an August sheet" fix only applies to the monthly log
   const headerDates=[], headerOdos=[]; let seenRow=false, unplaced=0;
-  for (const line of lines) {
+  // everything above the column titles (DAY / DATE / DASHBOARD) is the sheet header, even when OCR misreads "Oil" as "Oll"
+  const titleRow = lines.findIndex(l=>/\bDAY\b|DASHBOARD/i.test(l));
+  for (const [li, line] of lines.entries()) {
+    if (titleRow>0 && li<titleRow && !seenRow) {
+      const ht=line.split(/[\t ]+/).filter(Boolean);
+      ht.forEach(t=>{ const d=parseDate(t,null); if (d) headerDates.push(d); });
+      ht.filter(t=>!DATE_RE.test(t)).map(readNum).filter(n=>n && n.decimals===0 && n.v>=100000).forEach(n=>headerOdos.push(n.v));
+      continue;
+    }
+    if (titleRow>0 && li===titleRow) continue;
     // "$502.71$4.319" → "$502.71 $4.319" · "$ 502.71" → "$502.71"
     const toks=line.replace(/([^\s$])\$/g,'$1 $').replace(/\$\s+(?=[\dOoSB])/g,'$').split(/[\t ]+/).filter(Boolean).flatMap(splitGlued);
     if (/^TOTAL/i.test(line)) continue;
