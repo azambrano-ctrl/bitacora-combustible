@@ -19,6 +19,19 @@ const fGal = n => n==null ? '' : n.toLocaleString('en-US',{minimumFractionDigits
 const fPrice = n => n==null ? '' : '$' + n.toFixed(3);
 const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const usDate = d => { const [y,m,dd] = d.split('-'); return `${+m}/${+dd}/${y}`; };
+// Date boxes are plain text in US order (MM/DD/YYYY) so the browser's language never flips them to day/month.
+// The app keeps dates as YYYY-MM-DD internally; usPad() shows one, isoOf() reads one back ('' when invalid).
+const usPad = d => { if (!d) return ''; const [y,m,dd] = d.split('-'); return `${m}/${dd}/${y}`; };
+function isoOf(v){
+  const s=String(v||'').trim(); if (!s) return '';
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/), y, mo, d;
+  if (m) { y=+m[1]; mo=+m[2]; d=+m[3]; }
+  else if ((m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2}|\d{4})$/))) { mo=+m[1]; d=+m[2]; y=+m[3]; if (y<100) y+=2000; }
+  else return '';
+  if (mo<1||mo>12||d<1||d>new Date(y,mo,0).getDate()) return '';
+  return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+const USD_ATTRS = 'class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off"';
 const dim = (y,m) => new Date(y,m,0).getDate();
 const safeId = s => String(s).trim().replace(/[^A-Za-z0-9_\-.~]/g,'-');
 
@@ -136,11 +149,11 @@ function renderLog(){
     const hin=(k,ph,extra)=>`<input id="lh-${k}" data-t="${k}" placeholder="${ph}" autocomplete="off"${extra||''}${dis}>`;
     box.innerHTML=`<div class="sheet paperlog"><div class="pscroll">
       <div class="lhead">
-        <div class="obox"><div class="ol">New Oil Change</div>${hin('oilDate','',' type="date"')}${hin('oilOdo','millas',' inputmode="numeric"')}</div>
+        <div class="obox"><div class="ol">New Oil Change</div>${hin('oilDate','MM/DD/YYYY',' '+USD_ATTRS)}${hin('oilOdo','millas',' inputmode="numeric"')}</div>
         <div class="lmid"><div class="lt">MONTHLY LOG MILES</div>
           <div class="lrow"><span>COMPANY NAME:</span>${hin('company','nombre de la compañía')}<span>TRUCK # ${esc(t.number)}</span></div>
           <div class="lrow"><span>MONTH OF: ${MONTH[m-1]}</span><span class="sp"></span><span>YEAR: ${y}</span></div></div>
-        <div class="obox"><div class="ol">Last Oil Change</div>${hin('prevOilDate','',' type="date"')}${hin('prevOilOdo','millas',' inputmode="numeric"')}</div>
+        <div class="obox"><div class="ol">Last Oil Change</div>${hin('prevOilDate','MM/DD/YYYY',' '+USD_ATTRS)}${hin('prevOilOdo','millas',' inputmode="numeric"')}</div>
       </div>
       <table class="plog"><thead><tr><th>Day</th><th>Date</th><th>Driver<br>name</th><th>Dashboard<br>miles</th><th>Total miles<br>driven</th><th>Fuel<br>miles</th><th>Fuel<br>glns.</th><th>Fuel<br>cost</th><th>Price<br>per gal</th><th class="fl"></th></tr></thead>
       <tbody><tr class="carry" id="carryRow"></tr>${rows}<tr class="ptot" id="totRow"></tr></tbody></table></div>
@@ -160,7 +173,7 @@ function refreshLog(){
   const active=document.activeElement;
   for (const k of ['oilDate','oilOdo','company','prevOilDate','prevOilOdo']) {
     const el=$('#lh-'+k); if (!el || el===active) continue;
-    const v=t[k]; el.value = v==null ? '' : (k.endsWith('Odo') ? fOdo(v) : v);
+    const v=t[k]; el.value = v==null ? '' : (k.endsWith('Odo') ? fOdo(v) : k.endsWith('Date') ? usPad(v) : v);
   }
   const flagList=[];
   document.querySelectorAll('#logBody tr[data-date]').forEach(tr=>{
@@ -382,12 +395,12 @@ function quarterEdit(t,y,q){
       <table><thead><tr><th>Date</th><th class="n">Fueling price</th><th class="n">Fueling gallons</th><th class="n">Price per gallon</th><th class="x"></th></tr></thead><tbody data-ym="${ym}">`;
     for (const f of st.fuel) {
       const p=`r-${f.date}`;
-      h+=`<tr data-date="${f.date}"><td><input type="date" id="${p}-date" data-k="date" value="${f.date}" min="${min}" max="${max}"${dis}></td>
+      h+=`<tr data-date="${f.date}"><td><input type="text" ${USD_ATTRS} id="${p}-date" data-k="date" value="${usPad(f.date)}"${dis}></td>
         <td class="n">${inp(p+'-cost',f.cost.toFixed(2),'n" data-k="cost')}</td><td class="n">${inp(p+'-gal',fGal(f.gal),'n" data-k="gal')}</td>
         <td class="n">${inp(p+'-price',f.price.toFixed(3),'n" data-k="price')}</td>
         <td class="x">${S.canWrite?`<button type="button" class="rm" data-rm="${f.date}" aria-label="Borrar carga del ${usDate(f.date)}">×</button>`:''}</td></tr>`;
     }
-    if (S.canWrite) h+=`<tr class="new" data-new="${ym}"><td><input type="date" id="n-${ym}-date" data-k="date" min="${min}" max="${max}"></td>
+    if (S.canWrite) h+=`<tr class="new" data-new="${ym}"><td><input type="text" ${USD_ATTRS} id="n-${ym}-date" data-k="date"></td>
         <td class="n">${inp(`n-${ym}-cost`,'','n" data-k="cost','$ costo')}</td><td class="n">${inp(`n-${ym}-gal`,'','n" data-k="gal','galones')}</td>
         <td class="n">${inp(`n-${ym}-price`,'','n" data-k="price','$/gal')}</td><td class="x"></td></tr>`;
     if (st.fuel.length) {
@@ -418,7 +431,7 @@ function quarterTail(t,y,q,sts,edit){
   const cell=(which)=>{
     const d=qo[which+'Date'], o=qo[which];
     if (!edit) return `<td>${d?usDate(d):''}</td><td class="n">${fOdo(o)}</td>`;
-    return `<td><input type="date" id="q-${key}-${which}Date" data-q="${key}" data-k="${which}Date" value="${d||''}"${dis}></td>
+    return `<td><input type="text" ${USD_ATTRS} id="q-${key}-${which}Date" data-q="${key}" data-k="${which}Date" value="${usPad(d)}"${dis}></td>
       <td class="n"><input type="text" class="n" id="q-${key}-${which}" data-q="${key}" data-k="${which}" value="${o!=null?fOdo(o):''}" placeholder="odómetro" inputmode="numeric"${dis}>
       <div class="mhint">${src(qo[which+'Src'])}</div></td>`;
   };
@@ -485,7 +498,7 @@ function onReportChange(e){
   if (el.dataset.q) {
     const key=el.dataset.q, k=el.dataset.k, which=k.replace('Date',''), oEl=$(`#q-${key}-${which}`), dEl=$(`#q-${key}-${which}Date`);
     const odo=num(oEl.value);
-    writeQuarter(key, {[which+'Odo']:odo, [which+'Date']: odo==null ? null : (dEl.value||null)});
+    writeQuarter(key, {[which+'Odo']:odo, [which+'Date']: odo==null ? null : (isoOf(dEl.value)||null)});
     return later();
   }
   // manual month totals / miles
@@ -497,7 +510,7 @@ function onReportChange(e){
     return later();
   }
   if (!tr) return;
-  const date=tr.querySelector('[data-k="date"]').value;
+  const date=isoOf(tr.querySelector('[data-k="date"]').value);
   const v={cost:val('cost'),gal:val('gal'),price:val('price')};
   if (tr.dataset.new) {
     const filled=[v.cost,v.gal,v.price].filter(x=>x!=null).length;
@@ -533,7 +546,7 @@ const todayStr = () => { const n=new Date(); return `${n.getFullYear()}-${pad(n.
 const tdFuelVals = () => completeFuel({gal:num($('#tdGal').value), price:num($('#tdPrice').value), cost:num($('#tdCost').value)});
 function loadToday(force){
   if (S.tdDirty && !force) { renderTodayCalc(); renderRecent(); return; }
-  const t=S.trucks[S.truckId], date=$('#tdDate').value, e=t ? S.entries[S.truckId+'_'+date] : null;
+  const t=S.trucks[S.truckId], date=isoOf($('#tdDate').value), e=t ? S.entries[S.truckId+'_'+date] : null;
   $('#tdDriver').value = e?.driver || t?.driver || '';
   $('#tdOff').checked = !!e?.off;
   $('#tdOdo').value = e?.odo!=null ? fOdo(e.odo) : '';
@@ -549,7 +562,7 @@ function loadToday(force){
   renderTodayCalc(); renderRecent();
 }
 function renderTodayCalc(){
-  const date=$('#tdDate').value, off=$('#tdOff').checked, fuel=$('#tdFuel').checked;
+  const date=isoOf($('#tdDate').value), off=$('#tdOff').checked, fuel=$('#tdFuel').checked;
   $('#tdMilesBox').hidden=off; $('#tdFuelBox').hidden=!fuel;
   const prev = S.truckId && date ? lastOdoEntry(S.truckId, date) : null, odo=num($('#tdOdo').value);
   let h='';
@@ -583,7 +596,7 @@ function saveToday(ev){
   st.className='tdstatus';
   if (!S.canWrite) return err('Tienes acceso de solo lectura.');
   if (!S.trucks[S.truckId]) return err('Primero agrega un camión en la pestaña Camiones.');
-  const date=$('#tdDate').value; if (!date) return err('Escoge la fecha.');
+  const date=isoOf($('#tdDate').value); if (!date) return err('Escribe la fecha como MM/DD/YYYY.');
   const off=$('#tdOff').checked, odo=off?null:num($('#tdOdo').value), fuel=$('#tdFuel').checked;
   let v={gal:null,price:null,cost:null,fuelOdo:null};
   if (fuel) { v=tdFuelVals(); v.fuelOdo=num($('#tdFuelOdo').value); if (!v.gal || v.cost==null) return err('Para el diésel escribe galones y precio, o galones y total pagado.'); }
@@ -833,7 +846,7 @@ function reviewHTML(j){
   const inp=(r,k,v,w)=>`<input type="text" id="jr-${j.id}-${r.i}-${k}" data-j="${j.id}" data-r="${r.i}" data-k="${k}" value="${esc(v)}" style="min-width:${w}px" autocomplete="off">`;
   const rows=d.rows.map(r=>`<tr class="${!r.on?'skip':r.flags.length?'warn':''}">
       <td><input type="checkbox" id="jr-${j.id}-${r.i}-on" data-j="${j.id}" data-r="${r.i}" data-k="on"${r.on?' checked':''} aria-label="Importar renglón"></td>
-      <td><input type="date" id="jr-${j.id}-${r.i}-date" data-j="${j.id}" data-r="${r.i}" data-k="date" value="${r.date}"></td>
+      <td><input type="text" ${USD_ATTRS} id="jr-${j.id}-${r.i}-date" data-j="${j.id}" data-r="${r.i}" data-k="date" value="${usPad(r.date)}"></td>
       <td>${inp(r,'driver',r.driver,60)}</td>
       <td>${inp(r,'odo',r.off?'OFF DUTY':fOdo(r.odo),96)}</td>
       <td class="calc">${r.off?'OFF DUTY':(r.calcMiles!=null?fOdo(r.calcMiles):'')}</td>
@@ -901,7 +914,7 @@ function onReviewEdit(e){
   }
   const r=j.data.rows.find(x=>x.i===+el.dataset.r), k=el.dataset.k; if (!r) return;
   if (k==='on') r.on=el.checked;
-  else if (k==='date') r.date=el.value;
+  else if (k==='date') r.date=isoOf(el.value);
   else if (k==='driver') r.driver=el.value.trim();
   else if (k==='odo') { const v=el.value.trim(); r.off=/^off/i.test(v); r.odo=r.off?null:num(v); }
   else r[k]=num(el.value);
@@ -928,8 +941,8 @@ function renderTrucks(){
 function fillForm(t){
   $('#tfTitle').textContent = t ? `Editar truck #${t.number}` : 'Agregar camión';
   $('#tfNum').value=t?.number||''; $('#tfNum').disabled=!!t; $('#tfCo').value=t?.company||''; $('#tfModel').value=t?.model||'';
-  $('#tfDriver').value=t?.driver||''; $('#tfPrevDate').value=t?.prevOilDate||''; $('#tfPrevOdo').value=t?.prevOilOdo??'';
-  $('#tfOilDate').value=t?.oilDate||''; $('#tfOilOdo').value=t?.oilOdo??''; $('#tfInt').value=t?.oilInterval??20000;
+  $('#tfDriver').value=t?.driver||''; $('#tfPrevDate').value=usPad(t?.prevOilDate); $('#tfPrevOdo').value=t?.prevOilOdo??'';
+  $('#tfOilDate').value=usPad(t?.oilDate); $('#tfOilOdo').value=t?.oilOdo??''; $('#tfInt').value=t?.oilInterval??20000;
   $('#tfCancel').hidden=!t; S.editing=t?t.id:null;
 }
 
@@ -1000,7 +1013,7 @@ $('#impList').addEventListener('click', e=>{
 });
 $('#todayForm').addEventListener('input', e=>{ if (e.target.id==='tdDate') return; S.tdDirty=true; $('#tdStatus').textContent=''; renderTodayCalc(); });
 $('#tdDate').addEventListener('change', ()=>{ $('#tdStatus').textContent=''; loadToday(true); });
-$('#tdRecent').addEventListener('click', e=>{ const b=e.target.closest('[data-date]'); if (!b) return; $('#tdDate').value=b.dataset.date; $('#tdStatus').textContent=''; loadToday(true); $('#todayForm').scrollIntoView({behavior:'smooth',block:'start'}); });
+$('#tdRecent').addEventListener('click', e=>{ const b=e.target.closest('[data-date]'); if (!b) return; $('#tdDate').value=usPad(b.dataset.date); $('#tdStatus').textContent=''; loadToday(true); $('#todayForm').scrollIntoView({behavior:'smooth',block:'start'}); });
 $('#monthSel').addEventListener('change',e=>{ if (!e.target.value) return; S.month=e.target.value; const [y,m]=S.month.split('-').map(Number); S.year=y; S.q=Math.ceil(m/3); $('#yearSel').value=y; $('#qSel').value=S.q; refreshAll(); });
 $('#yearSel').addEventListener('change',e=>{ S.year=+e.target.value||S.year; renderReport(); });
 $('#qSel').addEventListener('change',e=>{ S.q=+e.target.value; renderReport(); });
@@ -1012,7 +1025,7 @@ $('#logBody').addEventListener('change',e=>{
   if (!S.canWrite) return;
   const k=e.target.dataset.t, t=S.trucks[S.truckId];
   if (k && t) {   // sheet header: oil changes and company belong to the truck
-    const v = k.endsWith('Odo') ? num(e.target.value) : (e.target.value.trim()||null);
+    const v = k.endsWith('Odo') ? num(e.target.value) : k.endsWith('Date') ? (isoOf(e.target.value)||null) : (e.target.value.trim()||null);
     writeTruck(S.truckId, {...t, [k]: k==='company' ? (v||'') : v});
     return;
   }
@@ -1047,11 +1060,30 @@ $('#truckForm').addEventListener('submit',async e=>{
   const id=S.editing||safeId(number);
   if (!S.editing && S.trucks[id]) { toast(`El truck #${number} ya existe. Usa Editar.`); return; }
   const data={ id, number, company:$('#tfCo').value.trim(), model:$('#tfModel').value.trim(), driver:$('#tfDriver').value.trim(),
-    prevOilDate:$('#tfPrevDate').value||null, prevOilOdo:num($('#tfPrevOdo').value), oilDate:$('#tfOilDate').value||null,
+    prevOilDate:isoOf($('#tfPrevDate').value)||null, prevOilOdo:num($('#tfPrevOdo').value), oilDate:isoOf($('#tfOilDate').value)||null,
     oilOdo:num($('#tfOilOdo').value), oilInterval:num($('#tfInt').value)||20000 };
   await writeTruck(id,data); S.truckId=id; fillForm(null); toast(`Truck #${number} guardado.`);
   if (!S.db) trucksChanged();
 });
+
+// ---------- US date boxes: type 08292026 or 8/29/2026, it becomes 08/29/2026 ----------
+document.addEventListener('input', e=>{
+  const el=e.target; if (!el.classList || !el.classList.contains('usd')) return;
+  const v=el.value;
+  if (!/[\/\-.]/.test(v)) {   // digits only: add the slashes as the person types
+    const d=v.replace(/\D/g,'').slice(0,8);
+    const f = d.length>4 ? `${d.slice(0,2)}/${d.slice(2,4)}/${d.slice(4)}` : d.length>2 ? `${d.slice(0,2)}/${d.slice(2)}` : d;
+    if (f!==v) el.value=f;
+  }
+  el.classList.remove('bad');
+}, true);
+document.addEventListener('change', e=>{   // runs before the app's own handlers so they read a clean value
+  const el=e.target; if (!el.classList || !el.classList.contains('usd')) return;
+  if (!el.value.trim()) { el.classList.remove('bad'); return; }
+  const iso=isoOf(el.value);
+  if (iso) { el.value=usPad(iso); el.classList.remove('bad'); }
+  else { el.classList.add('bad'); toast('Escribe la fecha como MM/DD/YYYY (mes/día/año).'); }
+}, true);
 
 // ---------- Supabase: data store with the small collection/doc API the app uses ----------
 let SB=null;
@@ -1157,7 +1189,7 @@ $('#logout').addEventListener('click', async ()=>{ await SB.auth.signOut(); loca
 // ---------- boot ----------
 (function init(){
   const now=new Date(); S.month=`${now.getFullYear()}-${pad(now.getMonth()+1)}`;
-  $('#tdDate').value=todayStr();
+  $('#tdDate').value=usPad(todayStr());
   try{ const a=localStorage.getItem('bc.avg'); if(a) S.avg=a; const tb=localStorage.getItem('bc.tab'); if(tb) document.querySelector(`nav.tabs [data-tab="${tb}"]`)?.click(); }catch(e){}
   const [y,m]=S.month.split('-').map(Number); S.year=y; S.q=Math.ceil(m/3);
   $('#monthSel').value=S.month; $('#yearSel').value=S.year; $('#qSel').value=S.q; $('#avgSel').value=S.avg;

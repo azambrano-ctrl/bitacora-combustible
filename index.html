@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Kalam:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 <div id="authScreen" class="auth" hidden>
@@ -48,7 +48,7 @@
     <div class="today-wrap">
       <form id="todayForm" class="today" novalidate>
         <div class="tgrid">
-          <label class="fld" for="tdDate">Fecha<input type="date" id="tdDate" required></label>
+          <label class="fld" for="tdDate">Fecha<input type="text" class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off" id="tdDate" required></label>
           <label class="fld" for="tdDriver">Chofer<input id="tdDriver" autocomplete="name"></label>
         </div>
         <label class="toggle" for="tdOff"><input type="checkbox" id="tdOff"> No trabajé este día (off duty)</label>
@@ -123,9 +123,9 @@
       <label class="fld" for="tfCo">Compañía<input id="tfCo" placeholder="Blackhawk Trans Inc."></label>
       <label class="fld" for="tfModel">Modelo<input id="tfModel" placeholder="Freightliner Cascadia 2017"></label>
       <label class="fld" for="tfDriver">Chofer habitual<input id="tfDriver" placeholder="Jr."></label>
-      <label class="fld" for="tfPrevDate">Cambio de aceite anterior<input type="date" id="tfPrevDate"></label>
+      <label class="fld" for="tfPrevDate">Cambio de aceite anterior<input type="text" class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off" id="tfPrevDate"></label>
       <label class="fld" for="tfPrevOdo">Millas en ese cambio<input type="number" id="tfPrevOdo" inputmode="numeric"></label>
-      <label class="fld" for="tfOilDate">Último cambio de aceite<input type="date" id="tfOilDate"></label>
+      <label class="fld" for="tfOilDate">Último cambio de aceite<input type="text" class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off" id="tfOilDate"></label>
       <label class="fld" for="tfOilOdo">Millas en ese cambio<input type="number" id="tfOilOdo" inputmode="numeric"></label>
       <label class="fld" for="tfInt">Cambiar aceite cada (millas)<input type="number" id="tfInt" value="20000" inputmode="numeric"></label>
       <div class="actions">
@@ -141,6 +141,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
