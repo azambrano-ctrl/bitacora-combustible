@@ -859,6 +859,15 @@ function fixPrice(p, gal, cost){
   if (!out.length) return p;
   return (want && out.find(v=>Math.abs(v-want)/want<0.005)) || out[0];   // the other reading only when gallons × price = cost
 }
+// A price that can't be a price ($630, $55799) when gallons and cost are fine: the receipt says price = cost ÷ gallons.
+// The misread digits are used only when they agree with that; otherwise the division wins.
+function settlePrice(p, gal, cost){
+  if (p==null || (p>=2 && p<=9.5)) return {price:p, fixed:false};
+  const want = gal>=5 && gal<=300 && cost>=10 && cost<=2500 ? cost/gal : null;
+  if (want==null || want<2 || want>9.5) { const f=fixPrice(p, gal, cost); return {price:f, fixed:f!==p}; }
+  const f=fixPrice(p, gal, cost);
+  return {price: f>=2 && f<=9.5 && Math.abs(f-want)/want<0.005 ? f : Math.round(want*1000)/1000, fixed:true};
+}
 function fixFuelCols(gal, cost, price, galReadDecimals=3){
   // same idea as reconcileFuel but each value already sits in its column; only the "$ read as a digit" slip is tried
   const V=n=>{ if (n==null) return [{v:null,pen:0}]; const out=[{v:n,pen:0}], s=String(n);
@@ -957,8 +966,7 @@ function parsePositional(words){
   const priceOf=s=>{ if (!s) return null; const cs=clean(s);
     if (lead && /^[.,]\d{3}$/.test(cs)) return Number(lead+'.'+cs.slice(1));
     const n=readNum(cs); if (!n) return null;
-    const v=n.amb?n.alt:n.v;
-    return v>=10 ? fixPrice(v) : v; };   // "$4599" / "5349" / "55799" ("$" read as 5)
+    return n.amb?n.alt:n.v; };   // "$4599" / "5349" / "55799" are settled below, once gallons and cost are known
   const rows=[]; let prevOdo=head.newOilChange?.miles ?? null;
   for (const a of filled) {
     const c=cells[a.date]; if (!c) continue;
@@ -974,7 +982,9 @@ function parsePositional(words){
     const odoFixed = odo!==odoRead || fuelOdo!==fuelRead || !near(odo, prevOdo) || !near(fuelOdo, odo ?? prevOdo);   // corrected, or still far off: check it
     const miles = off ? null : (odoDigits(totT) ?? null);
     const galRaw=clean(txt(c.gal)), galDec=((galRaw.match(/[.,](\d+)$/)||[])[1]||'').length || (galRaw?0:3);
-    let f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), priceOf(txt(c.price)), galDec);
+    const pRead=priceOf(txt(c.price)), pOk=pRead==null || (pRead>=2 && pRead<=9.5);
+    let f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), pOk ? pRead : null, galDec);
+    if (!pOk) { const s=settlePrice(pRead, f.gal, f.cost); f={...f, price:s.price, fixed:true}; }
     if ((f.gal!=null && f.gal>300) || (f.cost!=null && f.cost>2500) || (f.gal==null && f.cost!=null)) {   // cells glued into one number
       const p=priceOf(txt(c.price)), s=solveFuelDigits(txt(c.gal)+txt(c.cost)+(p!=null && p<=9.5 ? '' : txt(c.price)), p!=null && p<=9.5 ? p : null, odoLen);
       if (s) f={gal:s.gal, cost:s.cost, price:s.price, fixed:true};
@@ -1130,7 +1140,7 @@ function normalize(d){
     const s=solveFuelDigits([r.gal,r.cost,okP?null:r.price].filter(v=>v!=null).map(v=>String(v)).join(''), okP?r.price:null);
     if (s) Object.assign(r, {gal:s.gal, cost:s.cost, price:s.price, unclear:true});
   }
-  for (const r of rows) { const p=fixPrice(r.price, r.gal, r.cost); if (p!==r.price) Object.assign(r, {price:p, unclear:true}); }
+  for (const r of rows) { const s=settlePrice(r.price, r.gal, r.cost); if (s.fixed) Object.assign(r, {price:s.price, unclear:true}); }
   rows.sort((a,b)=>(a.date||'9')<(b.date||'9')?-1:1);
   const oil=o=>o&&(o.date||o.miles!=null)?{date:isoOk(o.date)?o.date:null, odo:num(o.miles)}:null;
   const totals=(d.monthTotals||[]).map(m=>({on:true, m:+m.month, y:+m.year||+d.year, cost:num(m.cost), gal:num(m.gallons), price:num(m.pricePerGallon)})).filter(m=>m.m>=1&&m.m<=12&&m.y&&(m.cost!=null||m.gal!=null));
