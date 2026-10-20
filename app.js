@@ -810,6 +810,23 @@ function splitOdoFuel(t, odoLen){
   const m=t.match(new RegExp(`^(\\d{${odoLen}})(\\d{1,3}[.,]\\d{3})(\\d{1,4}[.,]\\d{2})?$`));
   return m ? [m[1], m[2], ...(m[3] ? [m[3]] : [])] : [t];
 }
+// gallons, cost and price read as one run of digits ("107.945577.405.349" → 107.945 · 577.40 · 5.349):
+// try every split (gallons x.xxx, cost x.xx, price x.xxx, maybe an odometer in front) and keep the one where gallons × price = cost
+function solveFuelDigits(s, knownPrice=null, odoLen=6){
+  const D0=String(s||'').replace(/\D/g,''); if (D0.length<9) return null;
+  let best=null;
+  for (const D of new Set([D0, D0.replace(/0+$/,'')])) for (const skip of [0, odoLen]) for (const pl of knownPrice!=null ? [0,4] : [4]) {
+    const R=D.slice(skip, D.length-pl), p=pl ? Number(D.slice(-4))/1000 : knownPrice;
+    if (!(p>=2 && p<=9.5)) continue;
+    for (let gi=1; gi<=3; gi++) {
+      const g=Number(R.slice(0,gi+3))/1000, cs=R.slice(gi+3), c=Number(cs)/100;
+      if (cs.length<3 || cs.length>6 || g<5 || g>300 || c<10 || c>2500) continue;
+      const err=Math.abs(g*p-c)/c;
+      if (err<0.01 && (!best || err<best.err)) best={gal:g, cost:c, price:p, err};
+    }
+  }
+  return best;
+}
 function fixFuelCols(gal, cost, price, galReadDecimals=3){
   // same idea as reconcileFuel but each value already sits in its column; only the "$ read as a digit" slip is tried
   const V=n=>{ if (n==null) return [{v:null,pen:0}]; const out=[{v:n,pen:0}], s=String(n);
@@ -925,7 +942,11 @@ function parsePositional(words){
     const odoFixed = odo!==odoRead || fuelOdo!==fuelRead || !near(odo, prevOdo) || !near(fuelOdo, odo ?? prevOdo);   // corrected, or still far off: check it
     const miles = off ? null : (odoDigits(totT) ?? null);
     const galRaw=clean(txt(c.gal)), galDec=((galRaw.match(/[.,](\d+)$/)||[])[1]||'').length || (galRaw?0:3);
-    const f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), priceOf(txt(c.price)), galDec);
+    let f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), priceOf(txt(c.price)), galDec);
+    if ((f.gal!=null && f.gal>300) || (f.cost!=null && f.cost>2500) || (f.gal==null && f.cost!=null)) {   // cells glued into one number
+      const p=priceOf(txt(c.price)), s=solveFuelDigits(txt(c.gal)+txt(c.cost)+(p!=null && p<=9.5 ? '' : txt(c.price)), p!=null && p<=9.5 ? p : null, odoLen);
+      if (s) f={gal:s.gal, cost:s.cost, price:s.price, fixed:true};
+    }
     const any = off || odo!=null || fuelOdo!=null || f.gal!=null || f.cost!=null;
     if (!any) continue;
     const lowConf = (c.dash||[]).concat(c.total||[], c.fuelOdo||[], c.gal||[], c.cost||[]).some(w=>/[^0-9.,'$ ]/.test(w.t) && !OFF.test(w.t));
@@ -1072,6 +1093,11 @@ function normalize(d){
     gal:num(r.gallons), cost:num(r.cost), price:num(r.pricePerGallon), unclear:!!r.unclear }))
     .filter(r=>r.date||r.odo!=null||r.gal!=null||r.off);
   rows.forEach(r=>{ if (!r.date) r.on=false; });
+  for (const r of rows) if ((r.gal!=null && r.gal>300) || (r.cost!=null && r.cost>2500)) {   // gallons, cost and price glued together
+    const okP = r.price!=null && r.price>=2 && r.price<=9.5;
+    const s=solveFuelDigits([r.gal,r.cost,okP?null:r.price].filter(v=>v!=null).map(v=>String(v)).join(''), okP?r.price:null);
+    if (s) Object.assign(r, {gal:s.gal, cost:s.cost, price:s.price, unclear:true});
+  }
   rows.sort((a,b)=>(a.date||'9')<(b.date||'9')?-1:1);
   const oil=o=>o&&(o.date||o.miles!=null)?{date:isoOk(o.date)?o.date:null, odo:num(o.miles)}:null;
   const totals=(d.monthTotals||[]).map(m=>({on:true, m:+m.month, y:+m.year||+d.year, cost:num(m.cost), gal:num(m.gallons), price:num(m.pricePerGallon)})).filter(m=>m.m>=1&&m.m<=12&&m.y&&(m.cost!=null||m.gal!=null));
@@ -1093,6 +1119,8 @@ function reviewChecks(d, tid){
     if (!r.date) r.flags.push(['bad','Falta la fecha']);
     if (r.odo!=null && !r.off) { if (prev!=null) r.calcMiles=r.odo-prev; prev=r.odo; }
     if (r.calcMiles!=null && r.calcMiles<0) r.flags.push(['bad','Odómetro menor que el día anterior']);
+    if (r.calcMiles!=null && r.calcMiles>2500) r.flags.push(['bad',`Odómetro muy lejos del día anterior (+${fOdo(r.calcMiles)}): revisa`]);
+    if (r.fuelOdo!=null && prev!=null && (r.fuelOdo<prev-1500 || r.fuelOdo-prev>2500)) r.flags.push(['bad',`Fuel miles ${fOdo(r.fuelOdo)} no cuadra con el odómetro ${fOdo(prev)}: revisa`]);
     if (r.sheetMiles!=null && r.calcMiles!=null && r.sheetMiles!==r.calcMiles) r.flags.push(['warn',`La hoja dice ${fOdo(r.sheetMiles)}; el odómetro da ${fOdo(r.calcMiles)}`]);
     if (r.gal!=null && r.price!=null && r.cost!=null && Math.abs(r.gal*r.price-r.cost)>0.05) r.flags.push(['warn',`Galones × precio = ${fMoney(r2(r.gal*r.price))}`]);
     if (r.gal!=null && (r.gal<5 || r.gal>300)) r.flags.push(['bad',`Galones fuera de rango: ${fGal(r.gal)}`]);
