@@ -1122,8 +1122,8 @@ document.querySelectorAll('nav.tabs button').forEach(b=>b.addEventListener('clic
 $('#truckSel').addEventListener('change',e=>{ S.truckId=e.target.value; S.tdDirty=false; subscribeEntries(); refreshAll(); });
 $('#todayForm').addEventListener('submit', saveToday);
 $('#impFile').addEventListener('change', e=>{ addFiles([...e.target.files]); e.target.value=''; });
-try { const eng=localStorage.getItem('bc.engine'); if (eng && [...$('#impEngine').options].some(o=>o.value===eng)) $('#impEngine').value=eng; } catch(e){}
-$('#impEngine').addEventListener('change', e=>{ try { localStorage.setItem('bc.engine', e.target.value); } catch(_){} });
+try { const eng=localStorage.getItem('bc.reader'); if (eng && [...$('#impEngine').options].some(o=>o.value===eng)) $('#impEngine').value=eng; } catch(e){}
+$('#impEngine').addEventListener('change', e=>{ try { localStorage.setItem('bc.reader', e.target.value); } catch(_){} });
 ['dragenter','dragover'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.add('over'); }));
 ['dragleave','drop'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.remove('over'); }));
 $('#impDrop').addEventListener('drop', e=>{ if (e.dataTransfer?.files?.length) addFiles([...e.dataTransfer.files]); });
