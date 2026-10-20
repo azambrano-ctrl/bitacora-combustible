@@ -649,17 +649,22 @@ const monthOf = w => { const k=String(w||'').toUpperCase().replace(/[^A-Z]/g,'')
 const DATE_RE = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/;
 function readNum(t){
   // "1'096,060" → 1096060 · "$348.66" → 348.66 · "109.409" → 109.409 (3 decimals = gallons/price) · OCR slips O→0, l→1
-  let raw=String(t).trim().replace(/[;:]$/,''); const dollar=raw.includes('$');
+  let raw=String(t).trim().replace(/[;:,.'"`]+$/,''); const dollar=raw.includes('$');
   let s=raw.replace(/\$/g,'');
-  if (/\d/.test(s)) s=s.replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/[Ss](?=\d)/g,'5');
+  // handwriting slips: O→0, l/I/|→1, S→5, B→8, Z→2 (only inside tokens that already have digits)
+  if (/\d/.test(s)) s=s.replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/[Ss](?=\d)/g,'5').replace(/B/g,'8').replace(/[Zz]/g,'2');
   if (!/^\d[\d',.]*\d$|^\d$/.test(s)) return null;
   let decimals=0;
+  // "1.090,699": the apostrophe was read as a dot; when the last mark is a comma every mark is a thousands mark
+  if (s.includes('.') && s.includes(',') && s.lastIndexOf(',')>s.lastIndexOf('.')) s=s.replace(/[.,']/g,'');
   if (/[',]/.test(s)) s=s.replace(/[',](?=\d{3}(\D|$))/g,'');      // thousands marks
   if ((s.match(/\./g)||[]).length>1) s=s.replace(/\./g,'');         // 1.096.060
   const m=s.match(/\.(\d+)$/); if (m) decimals=m[1].length;
   s=s.replace(/[',]/g,'');
-  const v=Number(s); if (!isFinite(v)) return null;
+  let v=Number(s); if (!isFinite(v)) return null;
   if (decimals && Math.floor(v)>=100000) decimals=0;                // odometer written with a dot
+  // "1'090,699" read as 11,090,699: the apostrophe became a 1. Truck odometers have 7 digits, so drop it.
+  if (!decimals && v>=10000000 && v<20000000) v=Number(String(v)[0]+String(v).slice(2));
   return {v, decimals, dollar};
 }
 function parseDate(tok, sheet){
@@ -684,7 +689,8 @@ function parseOcr(text){
   const sheet={month: out.kind==='monthly_log' ? out.month : null};   // the "2/28 on an August sheet" fix only applies to the monthly log
   const headerDates=[], headerOdos=[]; let seenRow=false, unplaced=0;
   for (const line of lines) {
-    const toks=line.split(/[\t ]+/).filter(Boolean);
+    // "$502.71$4.319" → "$502.71 $4.319" · "$ 502.71" → "$502.71"
+    const toks=line.replace(/([^\s$])\$/g,'$1 $').replace(/\$\s+(?=[\dOoSB])/g,'$').split(/[\t ]+/).filter(Boolean);
     if (/^TOTAL/i.test(line)) continue;
     if (!seenRow && /COMPANY|MONTH\s*OF|YEAR\s*:|TRUCK\s*#|OIL\s*CHANGE/i.test(line)) {   // sheet header: oil change dates and odometers, left box first
       toks.forEach(t=>{ const d=parseDate(t,null); if (d) headerDates.push(d); });
@@ -711,9 +717,12 @@ function parseOcr(text){
       }
       continue;
     }
-    const r={date, driver:null, dashboard:null, offDuty:/\bOFF\b|DUTY/i.test(after.join(' ')), milesDriven:null, fuelMiles:null, gallons:null, cost:null, pricePerGallon:null, unclear:false};
-    const name=words.filter(w=>!/^(OFF|DUTY|\$)$/i.test(w) && !/^[SMTWF]$/i.test(w));
-    if (name.length) r.driver=name.slice(0,2).join(' ');
+    // OFF DUTY is often read as junk ("0FF", "DJITY", "bury"): a log row with words but no numbers at all is a day off
+    const offWords=/\b[0O]FF\b|D[UV]T|DUTY|DITY|JITY|BUTY|BURY/i.test(after.join(' '));
+    const r={date, driver:null, dashboard:null, offDuty: offWords || (out.kind!=='fuel_report' && !nums.length && words.length>=2), milesDriven:null, fuelMiles:null, gallons:null, cost:null, pricePerGallon:null, unclear:false};
+    // driver = the one word in the DRIVER column (right after the date), never leftover text from other cells
+    const first=after.find(t=>!/^[SMTWF]$/i.test(t));
+    if (first && !readNum(first) && /^[A-Za-z][A-Za-z.'-]{0,11}$/.test(first) && !/^(OFF|0FF|DUTY)$/i.test(first)) r.driver=first;
     const odos=[], money=[]; let extra=0;
     for (const n of nums) {
       if (n.decimals===0 && n.v>=100000) odos.push(n.v);
@@ -746,6 +755,23 @@ function parseOcr(text){
     if (r.dashboard!=null || r.offDuty || r.gallons!=null || r.cost!=null) { out.rows.push(r); seenRow=true; if (r.unclear) unplaced++; }
   }
   if (out.kind==='other' && out.rows.length) out.kind = out.rows.some(r=>r.dashboard!=null) ? 'monthly_log' : 'fuel_report';
+  // cross-check each day with the one before: dashboard = previous dashboard + miles driven
+  if (out.kind==='monthly_log') {
+    out.rows.sort((a,b)=>a.date<b.date?-1:1);
+    let prev=null;
+    for (const r of out.rows) {
+      if (r.offDuty) continue;
+      const expect = prev!=null && r.milesDriven!=null ? prev + r.milesDriven : null;
+      if (expect!=null && r.dashboard!=null && Math.abs(r.dashboard-expect)>2) {
+        // the only odometer read on a fuel day is often FUEL MILES (the dashboard cell was unreadable)
+        if (r.fuelMiles==null && r.dashboard<expect && expect-r.dashboard<1500 && (r.gallons!=null||r.cost!=null)) { r.fuelMiles=r.dashboard; r.dashboard=expect; r.unclear=true; }
+        // FUEL MILES read as the dashboard and vice versa
+        else if (r.fuelMiles!=null && Math.abs(r.fuelMiles-expect)<=2) { const t=r.dashboard; r.dashboard=r.fuelMiles; r.fuelMiles=t; r.unclear=true; }
+      }
+      if (r.dashboard==null && expect!=null) { r.dashboard=expect; r.unclear=true; }   // filled in from the miles column; flagged for review
+      if (r.dashboard!=null) prev=r.dashboard;
+    }
+  }
   if (headerDates[0] || headerOdos[0]) out.newOilChange={date:headerDates[0]||null, miles:headerOdos[0]??null};
   if (headerDates[1] || headerOdos[1]) out.lastOilChange={date:headerDates[1]||null, miles:headerOdos[1]??null};
   // when the sheet's year is known, make sure each row uses it (OCR often misreads the last digit)
