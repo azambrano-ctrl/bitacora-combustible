@@ -12,6 +12,10 @@ const $ = s => document.querySelector(s);
 const pad = n => String(n).padStart(2,'0');
 const r2 = x => Math.round(x*100)/100;
 const r3 = x => Math.round(x*1000)/1000;
+// gallons / cost / price boxes: a single comma with 1-3 digits after it is a decimal comma (95,158 → 95.158)
+const numDec = v => { if (v===''||v==null) return null; let t=String(v).replace(/[$\s']/g,'');
+  if (/^\d+,\d{1,3}$/.test(t)) t=t.replace(',','.'); else if (/^\d{1,3}(\.\d{3})+,\d+$/.test(t)) t=t.replace(/\./g,'').replace(',','.'); else t=t.replace(/,/g,'');
+  const x=Number(t); return isFinite(x) ? x : null; };
 const num = v => { if (v===''||v==null) return null; const n = Number(String(v).replace(/[,$\s']/g,'')); return isFinite(n) ? n : null; };
 const fOdo = n => n==null ? '' : Math.round(n).toLocaleString('en-US');
 const fMoney = n => n==null ? '' : '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -58,6 +62,8 @@ function flagsFor(e, chain){
   if (e.gal!=null && e.price!=null && e.cost!=null && Math.abs(e.gal*e.price - e.cost) > 0.05)
     out.push(['warn',`Galones × precio = ${fMoney(r2(e.gal*e.price))}`]);
   if (e.gal!=null && e.cost==null && e.price==null) out.push(['warn','Falta precio o costo']);
+  if (e.gal!=null && (e.gal<5 || e.gal>300)) out.push(['bad',`Galones fuera de rango: ${fGal(e.gal)}`]);
+  if (e.price!=null && (e.price<2 || e.price>9)) out.push(['warn',`Precio por galón raro: ${fPrice(e.price)}`]);
   if (e.fuelOdo!=null && e.odo!=null && e.fuelOdo > e.odo) out.push(['warn','Odómetro de carga mayor que el del día']);
   if (e.odo!=null && !e.driver) out.push(['warn','Falta chofer']);
   return out;
@@ -215,7 +221,7 @@ function saveRow(tr, changed){
   const g=f=>tr.querySelector(`[data-f="${f}"]`);
   const rawOdo=g('odo').value.trim(), off=/^off/i.test(rawOdo);   // "OFF DUTY" typed in the dashboard cell, like on paper
   const d={ truck:S.truckId, date, driver:g('driver').value.trim(), odo:off?null:num(rawOdo), off,
-    fuelOdo:num(g('fuelOdo').value), gal:num(g('gal').value), price:num(g('price').value), cost:num(g('cost').value) };
+    fuelOdo:num(g('fuelOdo').value), gal:numDec(g('gal').value), price:numDec(g('price').value), cost:numDec(g('cost').value) };
   if (d.gal!=null && d.price!=null && d.cost==null) { d.cost=r2(d.gal*d.price); }
   else if (d.gal && d.cost!=null && d.price==null) { d.price=r3(d.cost/d.gal); }
   if (!d.driver && (d.odo!=null||d.off||d.gal!=null) && t?.driver) d.driver=t.driver;
@@ -499,7 +505,7 @@ function writeMonth(ym, patch){
 const later = () => setTimeout(refreshAll, 0);
 function onReportChange(e){
   if (!S.canWrite) return;
-  const el=e.target, tr=el.closest('tr'), val=k=>{ const x=tr.querySelector(`[data-k="${k}"]`); return x ? num(x.value) : null; };
+  const el=e.target, tr=el.closest('tr'), val=k=>{ const x=tr.querySelector(`[data-k="${k}"]`); return x ? numDec(x.value) : null; };
   // quarter opening/closing odometer: an odometer and its date are saved together
   if (el.dataset.q) {
     const key=el.dataset.q, k=el.dataset.k, which=k.replace('Date',''), oEl=$(`#q-${key}-${which}`), dEl=$(`#q-${key}-${which}Date`);
@@ -549,7 +555,7 @@ function onReportChange(e){
 
 // ---------- today: one-day form for the driver ----------
 const todayStr = () => { const n=new Date(); return `${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}`; };
-const tdFuelVals = () => completeFuel({gal:num($('#tdGal').value), price:num($('#tdPrice').value), cost:num($('#tdCost').value)});
+const tdFuelVals = () => completeFuel({gal:numDec($('#tdGal').value), price:numDec($('#tdPrice').value), cost:numDec($('#tdCost').value)});
 function loadToday(force){
   if (S.tdDirty && !force) { renderTodayCalc(); renderRecent(); return; }
   const t=S.trucks[S.truckId], date=isoOf($('#tdDate').value), e=t ? S.entries[S.truckId+'_'+date] : null;
@@ -579,7 +585,7 @@ function renderTodayCalc(){
             : `Recorriste <b>${fOdo(m)}</b> millas desde el ${usDate(prev.date)} (${fOdo(prev.odo)})${m>900?' <span class="chip warn">revisa: más de 900</span>':''}`; }
   $('#tdMiles').innerHTML=h;
   if (fuel) {
-    const raw={gal:num($('#tdGal').value),price:num($('#tdPrice').value),cost:num($('#tdCost').value)}, v=tdFuelVals();
+    const raw={gal:numDec($('#tdGal').value),price:numDec($('#tdPrice').value),cost:numDec($('#tdCost').value)}, v=tdFuelVals();
     let f = v.gal && v.cost!=null ? `${fGal(v.gal)} gal × ${fPrice(v.price)} = <b>${fMoney(v.cost)}</b>` : 'Con dos de los tres (galones, precio, total) el tercero se calcula.';
     if (raw.gal!=null && raw.price!=null && raw.cost!=null && Math.abs(raw.gal*raw.price-raw.cost)>0.05) f += ` <span class="chip warn">galones × precio da ${fMoney(r2(raw.gal*raw.price))}</span>`;
     $('#tdFuelCalc').innerHTML=f;
@@ -673,6 +679,8 @@ function readNum(t){
   // handwriting slips: O→0, l/I/|→1, S→5, B→8, Z→2 (only inside tokens that already have digits)
   if (/\d/.test(s)) s=s.replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/[Ss](?=\d)/g,'5').replace(/B/g,'8').replace(/[Zz]/g,'2');
   if (!/^\d[\d',.]*\d$|^\d$/.test(s)) return null;
+  // "120,217" (odometer) and "95,158" (gallons written with a comma) look the same; the row decides later
+  const amb = !dollar && /^\d{1,3},\d{3}$/.test(s), alt = amb ? Number(s.replace(',','.')) : null;
   let decimals=0;
   // "1.090,699": the apostrophe was read as a dot; when the last mark is a comma every mark is a thousands mark
   if (s.includes('.') && s.includes(',') && s.lastIndexOf(',')>s.lastIndexOf('.')) s=s.replace(/[.,']/g,'');
@@ -684,7 +692,7 @@ function readNum(t){
   if (decimals && Math.floor(v)>=100000) decimals=0;                // odometer written with a dot
   // "1'090,699" read as 11,090,699: the apostrophe became a 1. Truck odometers have 7 digits, so drop it.
   if (!decimals && v>=10000000 && v<20000000) v=Number(String(v)[0]+String(v).slice(2));
-  return {v, decimals, dollar};
+  return {v, decimals, dollar, amb, alt};
 }
 function parseDate(tok, sheet){
   const m=String(tok).match(DATE_RE); if (!m) return null;
@@ -743,7 +751,14 @@ function parseOcr(text){
     const first=after.find(t=>!/^[SMTWF]$/i.test(t));
     if (first && !readNum(first) && /^[A-Za-z][A-Za-z.'-]{0,11}$/.test(first) && !/^(OFF|0FF|DUTY)$/i.test(first)) r.driver=first;
     const odos=[], money=[]; let extra=0;
-    for (const n of nums) {
+    for (let n of nums) {
+      if (n.amb) {
+        // a 6-digit "120,217" is an odometer when it opens the row (dashboard) or sits next to it (fuel miles);
+        // anything else written "x,xxx" is a decimal comma: 95,158 gallons, 5,499 price
+        const nearOdo = odos.length && Math.abs(n.v-odos[odos.length-1])<3000;
+        if (n.v>=100000 && (odos.length===0 || (odos.length<2 && nearOdo))) { odos.push(n.v); continue; }
+        n = {v:n.alt, decimals:3, dollar:false};
+      }
       if (n.decimals===0 && n.v>=100000) odos.push(n.v);
       else if (n.decimals>=2 && n.v>=2 && n.v<10) r.pricePerGallon ??= n.v;
       else if (n.dollar && n.decimals===0 && n.v>=2000 && n.v<10000 && String(n.v).length===4) r.pricePerGallon ??= n.v/1000;   // "$5349" = $5.349
@@ -769,6 +784,8 @@ function parseOcr(text){
     }
     r.dashboard=r.offDuty?null:(odos[0]??null); r.fuelMiles=odos[1]??null;
     if (r.offDuty) r.dashboard=null;
+    // a fuel day with one odometer and no miles driven: that odometer was written in FUEL MILES (dashboard left blank)
+    if (out.kind!=='fuel_report' && odos.length===1 && r.milesDriven==null && (r.gallons!=null || r.cost!=null)) { r.fuelMiles=odos[0]; r.dashboard=null; }
     const fuelBits=[r.gallons,r.cost,r.pricePerGallon].filter(v=>v!=null).length;
     r.unclear = extra>0 || (fuelBits>0 && fuelBits<2) || (out.kind!=='fuel_report' && !r.offDuty && r.dashboard==null);
     if (r.dashboard!=null || r.offDuty || r.gallons!=null || r.cost!=null) { out.rows.push(r); seenRow=true; if (r.unclear) unplaced++; }
@@ -828,6 +845,8 @@ function reviewChecks(d, tid){
     if (r.calcMiles!=null && r.calcMiles<0) r.flags.push(['bad','Odómetro menor que el día anterior']);
     if (r.sheetMiles!=null && r.calcMiles!=null && r.sheetMiles!==r.calcMiles) r.flags.push(['warn',`La hoja dice ${fOdo(r.sheetMiles)}; el odómetro da ${fOdo(r.calcMiles)}`]);
     if (r.gal!=null && r.price!=null && r.cost!=null && Math.abs(r.gal*r.price-r.cost)>0.05) r.flags.push(['warn',`Galones × precio = ${fMoney(r2(r.gal*r.price))}`]);
+    if (r.gal!=null && (r.gal<5 || r.gal>300)) r.flags.push(['bad',`Galones fuera de rango: ${fGal(r.gal)}`]);
+    if (r.price!=null && (r.price<2 || r.price>9)) r.flags.push(['warn',`Precio por galón raro: ${fPrice(r.price)}`]);
     if (r.unclear) r.flags.push(['warn','Letra difícil: revisa']);
     const ex=r.date && tid && S.entries[tid+'_'+r.date];
     if (ex && ((r.odo!=null && ex.odo!=null && ex.odo!==r.odo) || (r.gal!=null && ex.gal!=null && ex.gal!==r.gal))) r.flags.push(['bad','Ya hay otros datos guardados este día: se reemplazan']);
@@ -940,7 +959,7 @@ function onReviewEdit(e){
   else if (k==='date') r.date=isoOf(el.value);
   else if (k==='driver') r.driver=el.value.trim();
   else if (k==='odo') { const v=el.value.trim(); r.off=/^off/i.test(v); r.odo=r.off?null:num(v); }
-  else r[k]=num(el.value);
+  else r[k]=['gal','cost','price'].includes(k) ? numDec(el.value) : num(el.value);
   if (k!=='on' && k!=='driver') r.unclear=false;
   setTimeout(renderJobs,0);
 }
