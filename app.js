@@ -783,13 +783,32 @@ function reconcileFuel(pool, kind){
 // ---------- table from word positions (PaddleOCR / OCR.space overlay) ----------
 // Rows come from the printed dates (y), columns from the header words (x); each word goes to the cell it sits in.
 const odoDigits = s => { const d=String(s||'').replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/B/g,'8').replace(/S/g,'5').replace(/Z/g,'2').replace(/\D/g,''); return d ? Number(d) : null; };
-function fixOdo(v, ref){
-  // compare with a nearby odometer: restore missing leading digits (104,314 → 1,104,314) or drop one extra digit
-  if (v==null || ref==null || Math.abs(v-ref)<5000) return v;
+function fixOdo(v, ref, below=0){
+  // compare with a nearby odometer: restore missing leading digits (104,314 → 1,104,314), put back one digit lost
+  // in the middle (12,186 → 121,826), or drop one extra digit. A dashboard reading never goes back (below=0);
+  // FUEL MILES can sit a little under the day's dashboard (below>0).
+  if (v==null || ref==null) return v;
+  const ok = c => c>=ref-below && c-ref<2500;
+  if (ok(v)) return v;
   const vs=String(v), rs=String(ref);
-  if (vs.length<rs.length) { const c=Number(rs.slice(0, rs.length-vs.length)+vs); if (Math.abs(c-ref)<5000) return c; }
-  if (vs.length===rs.length+1) for (let i=0;i<vs.length;i++) { const c=Number(vs.slice(0,i)+vs.slice(i+1)); if (Math.abs(c-ref)<5000) return c; }
+  if (vs.length<rs.length) { const c=Number(rs.slice(0, rs.length-vs.length)+vs); if (ok(c)) return c; }
+  if (vs.length===rs.length-1) {
+    let best=null;
+    for (let i=0;i<=vs.length;i++) for (let d=0;d<=9;d++) { const c=Number(vs.slice(0,i)+d+vs.slice(i)); if (ok(c) && (best==null || Math.abs(c-ref)<Math.abs(best-ref))) best=c; }
+    if (best!=null) return best;
+  }
+  if (vs.length===rs.length+1) for (let i=0;i<vs.length;i++) { const c=Number(vs.slice(0,i)+vs.slice(i+1)); if (ok(c)) return c; }
+  if (vs.length===rs.length) {   // one digit misread (102,080 → 122,080)
+    let best=null;
+    for (let i=0;i<vs.length;i++) for (let d=0;d<=9;d++) { const c=Number(vs.slice(0,i)+d+vs.slice(i+1)); if (ok(c) && (best==null || Math.abs(c-ref)<Math.abs(best-ref))) best=c; }
+    if (best!=null) return best;
+  }
   return v;
+}
+// odometer + gallons (+ cost) glued with no space: "10204095.158", "188635107.945577.40"
+function splitOdoFuel(t, odoLen){
+  const m=t.match(new RegExp(`^(\\d{${odoLen}})(\\d{1,3}[.,]\\d{3})(\\d{1,4}[.,]\\d{2})?$`));
+  return m ? [m[1], m[2], ...(m[3] ? [m[3]] : [])] : [t];
 }
 function fixFuelCols(gal, cost, price, galReadDecimals=3){
   // same idea as reconcileFuel but each value already sits in its column; only the "$ read as a digit" slip is tried
@@ -806,6 +825,11 @@ function fixFuelCols(gal, cost, price, galReadDecimals=3){
   // gallons are written with 3 decimals; when OCR dropped one ("104.53") and they miss cost ÷ price by a hair,
   // use the arithmetic. With all 3 decimals read, keep them: a mismatch then is the sheet's own error.
   if (g && c!=null && p!=null && galReadDecimals<3 &&Math.abs(g*p-c)/c>0.005) { const q=c/p; if (Math.abs(q-g)/g<0.03) { g=Math.round(q*1000)/1000; fixed=true; } }
+  // all 3 decimals read but cost ÷ price lands on the same number with one or two digits misread (65.812 → 83.812)
+  if (g && c!=null && p!=null && galReadDecimals>=3 && Math.abs(g*p-c)/c>0.01) {
+    const q=(c/p).toFixed(3), gs=g.toFixed(3);
+    if (q.length===gs.length && [...q].filter((ch,i)=>ch!==gs[i]).length<=2 && Math.abs(Number(q.slice(-3))-Number(gs.slice(-3)))<=2) { g=Number(gs.slice(0,-3)===q.slice(0,-3)?q:q.slice(0,-3)+gs.slice(-3)); fixed=true; }
+  }
   if (g && c!=null && p==null) { const q=c/g; if (inR(q,P)) p=Math.round(q*1000)/1000; }
   if (g && p!=null && c==null) { const q=g*p; if (inR(q,C)) c=Math.round(q*100)/100; }
   return {gal:g, cost:c, price:p, fixed};
@@ -817,9 +841,23 @@ function wordsToText(words){
   return lines.map(L=>L.ws.sort((a,b)=>a.x-b.x).map(w=>w.t).join('\t')).join('\n');
 }
 function parsePositional(words){
-  const W=words.filter(w=>w && w.t && isFinite(w.x)).map(w=>({t:String(w.t).trim(), x0:w.x, y0:w.y, x1:w.x+w.w, y1:w.y+w.h, cx:w.x+w.w/2, cy:w.y+w.h/2}));
+  // one OCR box can hold several cells ("122,635 107.945 $577.40"): split it and place each part by where its
+  // characters sit inside the box, so every number lands in its own column
   const head=parseOcr(wordsToText(words));          // header fields + kind from the text
   if (head.kind==='fuel_report') return null;        // the quarterly report has its own layout: use the text parser
+  const odoLen = String(head.newOilChange?.miles ?? head.lastOilChange?.miles ?? 1000000).length;   // 6 or 7 digits for this truck
+  const W=[];
+  for (const w of words) {
+    if (!w || !w.t || !isFinite(w.x)) continue;
+    const t=String(w.t).trim(), parts=t.split(/\s+/).flatMap(splitGlued).flatMap(p=>splitOdoFuel(p, odoLen));
+    if (parts.length<2 || !parts.some(p=>/\d/.test(p))) { W.push({t, x0:w.x, y0:w.y, x1:w.x+w.w, y1:w.y+w.h, cx:w.x+w.w/2, cy:w.y+w.h/2}); continue; }
+    const total=parts.join(' ').length; let pos=0;
+    for (const p of parts) {
+      const a=w.x+w.w*pos/total, b=w.x+w.w*(pos+p.length)/total;
+      W.push({t:p, x0:a, y0:w.y, x1:b, y1:w.y+w.h, cx:(a+b)/2, cy:w.y+w.h/2});
+      pos+=p.length+1;
+    }
+  }
   const find=re=>W.filter(w=>re.test(w.t.replace(/\s+/g,'')));
   const dash=find(/^DASHBOARD/i)[0], total=find(/^TOTAL/i)[0], driver=find(/^DRIVER/i)[0];
   const fuel=find(/^FUEL$/i).sort((a,b)=>a.cx-b.cx);
@@ -864,7 +902,12 @@ function parsePositional(words){
   const money=s=>{ if (!s) return null; const n=readNum(clean(s)); if (!n) return null;
     if (n.amb) return n.alt;                                              // decimal comma: 95,158
     return n.v; };
-  const priceOf=s=>{ if (!s) return null; const n=readNum(clean(s)); if (!n) return null;
+  // a price that lost its first digit (",499") takes the dollar figure most other prices on the sheet have
+  const leads={}; for (const a of filled) { const p=readNum(clean(txt(cells[a.date]?.price)||'')); const v=p&&(p.amb?p.alt:p.v); if (v>=2 && v<9.5) leads[Math.floor(v)]=(leads[Math.floor(v)]||0)+1; }
+  const lead=Object.keys(leads).sort((a,b)=>leads[b]-leads[a])[0];
+  const priceOf=s=>{ if (!s) return null; const cs=clean(s);
+    if (lead && /^[.,]\d{3}$/.test(cs)) return Number(lead+'.'+cs.slice(1));
+    const n=readNum(cs); if (!n) return null;
     let v=n.amb?n.alt:n.v; if (!n.decimals && v>=1000 && v<10000) v=v/1000;   // "$4599" / "5349"
     return v; };
   const rows=[]; let prevOdo=head.newOilChange?.miles ?? null;
@@ -875,9 +918,11 @@ function parsePositional(words){
     const drv=(c.driver||[]).map(w=>w.t).find(t=>/^[A-Za-z][A-Za-z.'-]{0,11}$/.test(t)) || null;
     let odo = off ? null : odoDigits(txt(c.dash));
     if (odo!=null && odo<1000) odo=null;                                  // a stray "0" or a smudge, not an odometer
-    odo=fixOdo(odo, prevOdo);
+    const odoRead=odo; odo=fixOdo(odo, prevOdo);
     let fuelOdo=odoDigits(txt(c.fuelOdo)); if (fuelOdo!=null && fuelOdo<1000) fuelOdo=null;
-    fuelOdo=fixOdo(fuelOdo, odo ?? prevOdo);
+    const fuelRead=fuelOdo; fuelOdo=fixOdo(fuelOdo, odo ?? prevOdo, odo!=null ? 1500 : 50);
+    const near = (v,ref) => v==null || ref==null || (v>=ref-1500 && v-ref<2500);
+    const odoFixed = odo!==odoRead || fuelOdo!==fuelRead || !near(odo, prevOdo) || !near(fuelOdo, odo ?? prevOdo);   // corrected, or still far off: check it
     const miles = off ? null : (odoDigits(totT) ?? null);
     const galRaw=clean(txt(c.gal)), galDec=((galRaw.match(/[.,](\d+)$/)||[])[1]||'').length || (galRaw?0:3);
     const f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), priceOf(txt(c.price)), galDec);
@@ -885,8 +930,10 @@ function parsePositional(words){
     if (!any) continue;
     const lowConf = (c.dash||[]).concat(c.total||[], c.fuelOdo||[], c.gal||[], c.cost||[]).some(w=>/[^0-9.,'$ ]/.test(w.t) && !OFF.test(w.t));
     rows.push({date:a.date, driver:drv, dashboard:odo, offDuty:off, milesDriven:miles, fuelMiles:fuelOdo,
-      gallons:f.gal, cost:f.cost, pricePerGallon:f.price, unclear: f.fixed || lowConf});
-    if (odo!=null) prevOdo=odo;
+      gallons:f.gal, cost:f.cost, pricePerGallon:f.price, unclear: f.fixed || lowConf || odoFixed});
+    // the next day is checked against the last reading that made sense, so one bad odometer doesn't spread
+    const sane = v => v!=null && (prevOdo==null || (v>=prevOdo-50 && v-prevOdo<2500));
+    if (odo===odoRead && sane(odo)) prevOdo=odo; else if (odo==null && fuelOdo===fuelRead && sane(fuelOdo)) prevOdo=fuelOdo;
   }
   return {...head, kind:'monthly_log', rows, monthTotals:[], quarterMiles:null,
     notes: rows.some(r=>r.unclear) ? 'Revisa los renglones marcados: tenían letras o símbolos mezclados con los números.' : ''};
@@ -1087,7 +1134,7 @@ function reviewHTML(j){
       <td><input type="text" ${USD_ATTRS} id="jr-${j.id}-${r.i}-date" data-j="${j.id}" data-r="${r.i}" data-k="date" value="${usPad(r.date)}"></td>
       <td>${inp(r,'driver',r.driver,60)}</td>
       <td>${inp(r,'odo',r.off?'OFF DUTY':fOdo(r.odo),96)}</td>
-      <td class="calc">${r.off?'OFF DUTY':(r.calcMiles!=null?fOdo(r.calcMiles):'')}</td>
+      <td class="calc" title="${r.calcMiles!=null?'Según el odómetro: '+fOdo(r.calcMiles):''}">${r.off?'OFF DUTY':(r.sheetMiles!=null?fOdo(r.sheetMiles):'')}</td>
       <td>${inp(r,'fuelOdo',fOdo(r.fuelOdo),96)}</td>
       <td>${inp(r,'gal',r.gal!=null?fGal(r.gal):'',72)}</td>
       <td>${inp(r,'cost',r.cost!=null?r.cost.toFixed(2):'',72)}</td>
