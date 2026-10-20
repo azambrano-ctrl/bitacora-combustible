@@ -105,6 +105,13 @@
 
   <section id="tab-import" hidden>
     <div id="impOff" class="banner" hidden></div>
+    <div class="row">
+      <label class="fld" for="impEngine">Lector de fotos<select id="impEngine">
+        <option value="compare">Comparar DeepSeek y OCR.space</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="ocr">OCR.space</option>
+      </select></label>
+    </div>
     <label class="drop" id="impDrop" for="impFile">
       <b>Sube fotos de tus hojas ya llenas</b>
       <span>Hoja mensual (Monthly Log Miles) o reporte de fuel taxes. Fotos JPG o PNG; puedes escoger varias a la vez.</span>
@@ -144,6 +151,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

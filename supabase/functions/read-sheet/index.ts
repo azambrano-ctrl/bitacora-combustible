@@ -2,13 +2,15 @@
 //
 // - With ANTHROPIC_API_KEY set, Claude looks at the photo (whole sheet + zoomed top and bottom halves) and returns
 //   every dated row already split into its columns: { data: {...} }.
-// - Without it, the photo goes to OCR.space (OCR_SPACE_API_KEY) and the app sorts the raw text: { text: "..." }.
+// - Without it, the photo goes to OCR.space (OCR_SPACE_API_KEY) and the app rebuilds the table from the position of
+//   every word: { text: "...", words: [{t, x, y, w, h}] }.
 //
 // Keys live in the function's secrets, never in the web page. Only signed-in users of the app can call it.
 
 import Anthropic from "npm:@anthropic-ai/sdk";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+const DEEPSEEK_KEY = Deno.env.get("DEEPSEEK_API_KEY");
 const OCR_KEY = Deno.env.get("OCR_SPACE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -142,6 +144,37 @@ async function readWithClaude(images: string[]) {
   catch { throw new Error("Claude no devolvió los datos en el formato esperado. Sube la foto otra vez."); }
 }
 
+// ---------------------------------------------------------------- DeepSeek (deepseek-flash reads images)
+
+async function readWithDeepSeek(images: string[]) {
+  const content = [
+    { type: "text", text: PROMPT + "\n\nThe extra photos are zoomed horizontal bands of the same sheet, top to bottom." +
+      "\n\nReply with only one JSON object (no other text) that follows this JSON Schema:\n" + JSON.stringify(SHEET_SCHEMA) },
+    ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+  ];
+  const call = (jsonMode: boolean) => fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${DEEPSEEK_KEY}` },
+    body: JSON.stringify({
+      model: "deepseek-flash", max_tokens: 8000, temperature: 0,
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      messages: [{ role: "user", content }],
+    }),
+  });
+  let r = await call(true);
+  if (r.status === 400) r = await call(false);   // JSON mode not accepted with images: plain reply
+  if (r.status === 401) throw new Error("La clave de DeepSeek no es válida. Revisa DEEPSEEK_API_KEY en Supabase.");
+  if (r.status === 402) throw new Error("Tu cuenta de DeepSeek no tiene saldo. Recarga en platform.deepseek.com.");
+  if (r.status === 429) throw Object.assign(new Error("Se hicieron muchas lecturas seguidas. Espera un minuto y vuelve a intentar."), { status: 429 });
+  if (!r.ok) throw new Error(`DeepSeek respondió ${r.status}. Intenta de nuevo en un momento.`);
+  const out: { choices?: { message?: { content?: string }; finish_reason?: string }[] } = await r.json();
+  const text = out.choices?.[0]?.message?.content ?? "";
+  if (out.choices?.[0]?.finish_reason === "length") throw new Error("La lectura de DeepSeek quedó cortada. Sube la foto otra vez.");
+  const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+  try { return JSON.parse(json); }
+  catch { throw new Error("DeepSeek no devolvió los datos en el formato esperado. Sube la foto otra vez."); }
+}
+
 // ---------------------------------------------------------------- OCR.space (fallback)
 
 async function readWithOcrSpace(image: string) {
@@ -153,11 +186,19 @@ async function readWithOcrSpace(image: string) {
   form.append("scale", "true");
   form.append("detectOrientation", "true");
   form.append("OCREngine", OCR_ENGINE);
+  form.append("isOverlayRequired", "true"); // position of every word, so the app can rebuild the table
   const r = await fetch("https://api.ocr.space/parse/image", { method: "POST", headers: { apikey: OCR_KEY! }, body: form });
   if (!r.ok) throw new Error(`OCR.space respondió ${r.status}. Intenta de nuevo en un momento.`);
-  const out: { IsErroredOnProcessing?: boolean; ErrorMessage?: string | string[]; ParsedResults?: { ParsedText?: string }[] } = await r.json();
+  type OcrWord = { WordText: string; Left: number; Top: number; Height: number; Width: number };
+  const out: {
+    IsErroredOnProcessing?: boolean; ErrorMessage?: string | string[];
+    ParsedResults?: { ParsedText?: string; TextOverlay?: { Lines?: { Words?: OcrWord[] }[] } }[];
+  } = await r.json();
   if (out.IsErroredOnProcessing) throw new Error(([] as string[]).concat(out.ErrorMessage ?? []).join(" ") || "OCR.space no pudo leer la foto.");
-  return (out.ParsedResults ?? []).map((p) => p.ParsedText ?? "").join("\n");
+  const text = (out.ParsedResults ?? []).map((p) => p.ParsedText ?? "").join("\n");
+  const words = (out.ParsedResults ?? []).flatMap((p) => (p.TextOverlay?.Lines ?? []).flatMap((l) => l.Words ?? []))
+    .map((w) => ({ t: w.WordText, x: w.Left, y: w.Top, w: w.Width, h: w.Height }));
+  return { text, words };
 }
 
 // ---------------------------------------------------------------- handler
@@ -166,9 +207,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return reply({ error: "Usa POST." }, 405);
   if (!(await isSignedIn(req))) return reply({ error: "Inicia sesión para leer fotos." }, 401);
-  if (!ANTHROPIC_KEY && !OCR_KEY) return reply({ error: "Falta configurar el lector de fotos en el servidor (ANTHROPIC_API_KEY u OCR_SPACE_API_KEY)." }, 500);
+  if (!ANTHROPIC_KEY && !DEEPSEEK_KEY && !OCR_KEY) return reply({ error: "Falta configurar el lector de fotos en el servidor (DEEPSEEK_API_KEY, ANTHROPIC_API_KEY u OCR_SPACE_API_KEY)." }, 500);
 
-  let body: { image?: unknown; images?: unknown };
+  let body: { image?: unknown; images?: unknown; engine?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -178,10 +219,18 @@ Deno.serve(async (req) => {
   if (!images.length) return reply({ error: "Manda la foto como JPG o PNG." }, 400);
   if (images.some((x) => bytesOf(x) > MAX_IMAGE_BYTES)) return reply({ error: "La foto es demasiado grande. Prueba con una foto más pequeña." }, 413);
 
+  // engine: "deepseek" | "claude" | "ocr" | "auto" (auto = Claude, then DeepSeek, then OCR.space, whichever has a key)
+  const want = typeof body.engine === "string" ? body.engine : "auto";
+  const engine = want === "auto" ? (ANTHROPIC_KEY ? "claude" : DEEPSEEK_KEY ? "deepseek" : "ocr") : want;
+  const missing = { claude: !ANTHROPIC_KEY && "ANTHROPIC_API_KEY", deepseek: !DEEPSEEK_KEY && "DEEPSEEK_API_KEY", ocr: !OCR_KEY && "OCR_SPACE_API_KEY" }[engine as "claude"];
+  if (missing === undefined) return reply({ error: "Lector desconocido." }, 400);
+  if (missing) return reply({ error: `Falta la clave ${missing} en los secretos de Supabase.` }, 500);
+
   try {
-    if (ANTHROPIC_KEY) return reply({ data: await readWithClaude(images.slice(0, 3)), engine: "claude" });
+    if (engine === "claude") return reply({ data: await readWithClaude(images.slice(0, 3)), engine });
+    if (engine === "deepseek") return reply({ data: await readWithDeepSeek(images.slice(0, 5)), engine });
     const small = typeof body.image === "string" ? body.image : images[0];
-    return reply({ text: await readWithOcrSpace(small), engine: "ocrspace" });
+    return reply({ ...(await readWithOcrSpace(small)), engine: "ocrspace" });
   } catch (e) {
     if (e instanceof Anthropic.AuthenticationError) return reply({ error: "La clave de Anthropic no es válida. Revisa ANTHROPIC_API_KEY en Supabase." }, 500);
     if (e instanceof Anthropic.RateLimitError) return reply({ error: "Se hicieron muchas lecturas seguidas. Espera un minuto y vuelve a intentar." }, 429);

@@ -645,7 +645,7 @@ async function toJpegDataUrl(file){
 // (the size Claude reads at full detail), so small handwriting stays legible.
 async function sheetViews(file){
   const bmp=await createImageBitmap(file), out=[];
-  for (const [y0,y1] of [[0,1],[0,.55],[.45,1]]) {
+  for (const [y0,y1] of [[0,1],[0,.4],[.3,.7],[.6,1]]) {   // whole sheet + three overlapping bands
     const sh=Math.round(bmp.height*(y1-y0)), sy=Math.round(bmp.height*y0);
     const scale=Math.min(1, 1568/Math.max(bmp.width, sh));
     const c=document.createElement('canvas'); c.width=Math.round(bmp.width*scale); c.height=Math.round(sh*scale);
@@ -655,19 +655,23 @@ async function sheetViews(file){
   return out;
 }
 // Returns {data} when Claude read the sheet (rows already in columns) or {text} from OCR.space
-IMP.recognize = async file => {
+IMP.recognize = async (file, engine) => {
   if (!SB) throw new Error('Falta configurar Supabase (ver README).');
-  const [image, images] = await Promise.all([toJpegDataUrl(file), sheetViews(file)]);
-  const {data, error} = await SB.functions.invoke('read-sheet', {body:{image, images}});
+  const [image, images] = await Promise.all([toJpegDataUrl(file), engine==='ocr' ? [] : sheetViews(file)]);
+  const {data, error} = await SB.functions.invoke('read-sheet', {body:{image, images: images.length ? images : undefined, engine: engine||'auto'}});
   if (error) { let msg=''; try { msg=(await error.context.json()).error; } catch(e){} throw new Error(msg || 'No se pudo conectar con el lector de fotos.'); }
   if (data?.error) throw new Error(data.error);
   return data || {};
 };
+const ENGINE_NAME = {deepseek:'Leído con DeepSeek', ocr:'Leído con OCR.space', ocrspace:'Leído con OCR.space', claude:'Leído con Claude', auto:''};
+const ENGINE_CHIP = {deepseek:'ok', ocr:'warn', claude:'ok'};
 function addFiles(files){
   for (const f of files) {
     if (!/^image\//.test(f.type)) { toast(`${f.name}: sube una foto (JPG o PNG), no ${f.type||'este tipo de archivo'}.`); continue; }
-    const job={id:++IMP.seq, file:f, url:URL.createObjectURL(f), status:'queued', data:null};
-    IMP.jobs.unshift(job);
+    // "Comparar": the same photo read by both, side by side, so the better reading can be saved
+    const choice=$('#impEngine').value, url=URL.createObjectURL(f);
+    for (const engineReq of choice==='compare' ? ['deepseek','ocr'] : [choice])
+      IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq});
   }
   renderJobs(); pump();
 }
@@ -676,9 +680,9 @@ async function pump(){
   const job=IMP.jobs.slice().reverse().find(j=>j.status==='queued'); if (!job) return;
   IMP.busy=true; job.status='reading'; renderJobs();
   try {
-    const res=await IMP.recognize(job.file);
+    const res=await IMP.recognize(job.file, job.engineReq);
     if (res.data) {   // Claude: every row already in its columns
-      job.raw=null; job.engine='claude'; job.data=normalize(res.data);
+      job.raw=null; job.engine=res.engine||'claude'; job.data=normalize(res.data);
     } else {          // OCR.space: sort the raw text into columns here
       const text=res.text||'';
       if (!text.trim()) throw new Error('No se encontró texto en la foto. Prueba con una foto más clara y derecha.');
@@ -939,7 +943,7 @@ function renderJobs(){
     const btn = j.status==='reading' ? ''
       : j.status==='error' ? `<button class="btn" data-retry="${j.id}">Leer otra vez</button><button class="btn" data-drop="${j.id}">Quitar</button>`
       : j.status==='saved' ? `<button class="btn" data-view="${j.id}">Ver la hoja</button><button class="btn" data-drop="${j.id}">Quitar</button>` : '';
-    return `<div class="job"><div class="jhead"><img src="${j.url}" alt="Foto ${esc(j.file.name)}"><div class="jn"><b>${esc(j.file.name)}</b><div class="jstat ${cls}">${esc(stat)}</div></div>${btn}</div>
+    return `<div class="job"><div class="jhead"><img src="${j.url}" alt="Foto ${esc(j.file.name)}"><div class="jn"><b>${esc(j.file.name)}</b> <span class="chip ${ENGINE_CHIP[j.engineReq]||''}">${esc(ENGINE_NAME[j.engine||j.engineReq]||'')}</span><div class="jstat ${cls}">${esc(stat)}</div></div>${btn}</div>
       <div class="jbody">${j.status==='review' ? reviewHTML(j) : ''}</div></div>`;
   }).join('');
   if (keep) document.getElementById(keep)?.focus();
@@ -1118,6 +1122,8 @@ document.querySelectorAll('nav.tabs button').forEach(b=>b.addEventListener('clic
 $('#truckSel').addEventListener('change',e=>{ S.truckId=e.target.value; S.tdDirty=false; subscribeEntries(); refreshAll(); });
 $('#todayForm').addEventListener('submit', saveToday);
 $('#impFile').addEventListener('change', e=>{ addFiles([...e.target.files]); e.target.value=''; });
+try { const eng=localStorage.getItem('bc.engine'); if (eng && [...$('#impEngine').options].some(o=>o.value===eng)) $('#impEngine').value=eng; } catch(e){}
+$('#impEngine').addEventListener('change', e=>{ try { localStorage.setItem('bc.engine', e.target.value); } catch(_){} });
 ['dragenter','dragover'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.add('over'); }));
 ['dragleave','drop'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.remove('over'); }));
 $('#impDrop').addEventListener('drop', e=>{ if (e.dataTransfer?.files?.length) addFiles([...e.dataTransfer.files]); });
@@ -1127,7 +1133,7 @@ $('#impList').addEventListener('click', e=>{
   const b=e.target.closest('button'); if (!b) return;
   const id=+(b.dataset.retry||b.dataset.drop||b.dataset.save||b.dataset.view||b.dataset.mktruck), j=IMP.jobs.find(x=>x.id===id); if (!j) return;
   if (b.dataset.retry) { j.status='queued'; renderJobs(); pump(); }
-  if (b.dataset.drop) { URL.revokeObjectURL(j.url); IMP.jobs=IMP.jobs.filter(x=>x!==j); renderJobs(); }
+  if (b.dataset.drop) { IMP.jobs=IMP.jobs.filter(x=>x!==j); if (!IMP.jobs.some(x=>x.url===j.url)) URL.revokeObjectURL(j.url); renderJobs(); }
   if (b.dataset.save) saveJob(j);
   if (b.dataset.mktruck && j.data?.truck) {
     const d=j.data, id=safeId(d.truck);
