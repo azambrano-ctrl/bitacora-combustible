@@ -101,6 +101,7 @@ h2.sec{font-family:var(--f-display);font-size:20px;text-transform:uppercase;lett
 .jbody{padding:12px;display:flex;flex-direction:column;gap:12px}
 .jbody:empty{display:none}
 .repeat{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-weight:600;font-size:14px}
+.jtruck select{font-size:15px;font-weight:600;padding:6px 10px;min-width:160px;border:2px solid var(--accent)}
 .jmeta{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:flex-end;font-size:13px}
 .jmeta .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;display:block}
 .jmeta .v{font-family:var(--f-mono);font-size:14px}

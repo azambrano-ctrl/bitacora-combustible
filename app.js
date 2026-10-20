@@ -676,9 +676,9 @@ async function addFiles(files){
     const hash=await fileHash(f);
     if (hash && IMP.jobs.some(j=>j.hash===hash)) { toast(`${f.name}: esa foto ya está en la lista.`); continue; }
     // "Comparar": the same photo read by both, side by side, so the better reading can be saved
-    const choice=$('#impEngine').value, url=URL.createObjectURL(f);
+    const choice=$('#impEngine').value, truckReq=$('#impTruck').value||null, url=URL.createObjectURL(f);
     for (const engineReq of choice==='compare' ? ['deepseek','paddle'] : [choice])
-      IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq, hash});
+      IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq, hash, truckReq});
   }
   renderJobs(); pump();
 }
@@ -714,7 +714,7 @@ async function pump(){
       job.data=normalize(pos && pos.rows.length ? pos : parseOcr(text));
     }
     if (!job.data.rows.length && !job.data.totals.length) throw new Error('No encontré renglones con datos en la foto. Revisa que se vea la hoja completa y derecha.');
-    job.truckId=truckForSheet(job.data); await checkRepeat(job); job.status='review';
+    job.truckId=(job.truckReq && S.trucks[job.truckReq]) ? job.truckReq : truckForSheet(job.data); await checkRepeat(job); job.status='review';
   } catch(e){ job.status='error'; job.err=e.message||'No se pudo leer la foto. Presiona Leer otra vez.'; }
   IMP.busy=false; renderJobs(); pump();
 }
@@ -1201,7 +1201,7 @@ function reviewHTML(j){
   const mismatch = !d.truck ? `<span class="chip warn">No encontré el número de camión en la hoja: escógelo</span>`
     : !exists ? `<span class="chip warn">La hoja dice truck #${esc(d.truck)}, que no está registrado</span> ${S.canWrite?`<button class="btn" data-mktruck="${j.id}">Crear truck #${esc(d.truck)}</button>`:''}`
     : tid===safeId(d.truck) ? `<span class="chip ok">Detectado en la hoja: truck #${esc(d.truck)}</span>`
-    : `<span class="chip warn">La hoja dice truck #${esc(d.truck)}</span>`;
+    : `<span class="chip warn">La hoja dice truck #${esc(d.truck)}${tid?`, pero se guardará en #${esc(S.trucks[tid]?.number||'')}`:''}</span>`;
   const inp=(r,k,v,w)=>`<input type="text" id="jr-${j.id}-${r.i}-${k}" data-j="${j.id}" data-r="${r.i}" data-k="${k}" value="${esc(v)}" style="min-width:${w}px" autocomplete="off">`;
   const rows=d.rows.map(r=>`<tr class="${!r.on?'skip':r.flags.length?'warn':''}">
       <td><input type="checkbox" id="jr-${j.id}-${r.i}-on" data-j="${j.id}" data-r="${r.i}" data-k="on"${r.on?' checked':''} aria-label="Importar renglón"></td>
@@ -1221,7 +1221,7 @@ function reviewHTML(j){
   if (d.qm) ex.push(`<label><input type="checkbox" data-j="${j.id}" data-x="qm" id="jx-${j.id}-q"${d.qm.on?' checked':''}> Odómetros del trimestre: apertura ${d.qm.startDate?usDate(d.qm.startDate):''} ${fOdo(d.qm.start)} · cierre ${d.qm.endDate?usDate(d.qm.endDate):''} ${fOdo(d.qm.end)}</label>`);
   return `${repeat?`<div class="repeat">⚠ Hoja repetida. ${esc(repeat)} Si la guardas otra vez, esos días se sobrescriben.</div>`:''}<div class="jmeta"><div><span class="k">Tipo</span><span class="v">${kind}</span></div>
       ${d.month?`<div><span class="k">Mes</span><span class="v">${MONTH[d.month-1]} ${d.year||''}</span></div>`:''}
-      <div><span class="k">Camión de esta hoja</span>${tsel} ${mismatch}</div>
+      <div class="jtruck"><span class="k">Guardar en el camión</span>${tsel} ${mismatch}</div>
       <div><span class="k">Renglones</span><span class="v">${nOn} a guardar${nWarn?` · <span class="chip warn">${nWarn} por revisar</span>`:''}</span></div></div>
     ${d.notes?`<div class="jstat">Nota: ${esc(d.notes)}</div>`:''}${j.raw?`<details><summary class="jstat">Ver el texto que leyó OCR</summary><pre class="rawocr">${esc(j.raw)}</pre></details>`:''}
     ${d.rows.length?`<div class="scroll"><table class="rv"><thead><tr><th></th><th>Date</th><th>Driver</th><th>Dashboard miles</th><th style="text-align:right">Miles driven</th><th>Fuel miles</th><th>Fuel glns.</th><th>Fuel cost</th><th>Price/gal</th><th>Revisar</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="jstat">No se encontraron renglones de días o cargas.</div>'}
@@ -1273,7 +1273,7 @@ async function saveJob(j){
 }
 function onReviewEdit(e){
   const el=e.target, j=IMP.jobs.find(x=>x.id===+el.dataset.j); if (!j || !j.data) return;
-  if (el.dataset.jt) { j.truckId=el.value||null; renderJobs(); return; }
+  if (el.dataset.jt) { j.truckId=el.value||null; renderJobs(); checkRepeat(j).then(renderJobs); return; }   // re-check repeats against the new truck
   if (el.dataset.x) {
     if (el.dataset.x==='header') j.data.headerOn=el.checked;
     if (el.dataset.x==='tot') j.data.totals[+el.dataset.n].on=el.checked;
@@ -1321,6 +1321,10 @@ function truckOptions(){
   if (!S.truckId || !S.trucks[S.truckId]) S.truckId = list[0]?.id || null;
   sel.innerHTML = list.length ? list.map(t=>`<option value="${esc(t.id)}"${t.id===S.truckId?' selected':''}>#${esc(t.number)}${t.model?' · '+esc(t.model):''}${t.plate?' · '+esc(t.plate):''}</option>`).join('') : '<option>Sin camiones</option>';
   sel.disabled=!list.length;
+  // photo import: automatic (the TRUCK # written on the sheet) or a truck picked here for every photo uploaded next
+  const imp=$('#impTruck'), keep=imp.value;
+  imp.innerHTML = '<option value="">Según el TRUCK # de la hoja</option>' + list.map(t=>`<option value="${esc(t.id)}">#${esc(t.number)}${t.plate?' · '+esc(t.plate):''}</option>`).join('');
+  imp.value = S.trucks[keep] ? keep : '';
 }
 function trucksChanged(){ const before=S.truckId; truckOptions(); if (S.truckId!==before) subscribeEntries(); refreshAll(); }
 function refreshAll(){ loadToday(); renderLog(); renderReport(); renderTrucks(); }
