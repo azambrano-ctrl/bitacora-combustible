@@ -1,0 +1,6 @@
+paddlepaddle==3.0.0
+paddleocr>=3.0,<4
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pillow>=10
+numpy<2

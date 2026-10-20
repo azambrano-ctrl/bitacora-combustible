@@ -657,20 +657,20 @@ async function sheetViews(file){
 // Returns {data} when Claude read the sheet (rows already in columns) or {text} from OCR.space
 IMP.recognize = async (file, engine) => {
   if (!SB) throw new Error('Falta configurar Supabase (ver README).');
-  const [image, images] = await Promise.all([toJpegDataUrl(file), engine==='ocr' ? [] : sheetViews(file)]);
+  const [image, images] = await Promise.all([toJpegDataUrl(file), (engine==='ocr' || engine==='paddle') ? [] : sheetViews(file)]);
   const {data, error} = await SB.functions.invoke('read-sheet', {body:{image, images: images.length ? images : undefined, engine: engine||'auto'}});
   if (error) { let msg=''; try { msg=(await error.context.json()).error; } catch(e){} throw new Error(msg || 'No se pudo conectar con el lector de fotos.'); }
   if (data?.error) throw new Error(data.error);
   return data || {};
 };
-const ENGINE_NAME = {deepseek:'Leído con DeepSeek', ocr:'Leído con OCR.space', ocrspace:'Leído con OCR.space', claude:'Leído con Claude', auto:''};
-const ENGINE_CHIP = {deepseek:'ok', ocr:'warn', claude:'ok'};
+const ENGINE_NAME = {deepseek:'Leído con DeepSeek', paddle:'Leído con PaddleOCR', ocr:'Leído con OCR.space', ocrspace:'Leído con OCR.space', claude:'Leído con Claude', auto:''};
+const ENGINE_CHIP = {deepseek:'ok', paddle:'ok', ocr:'warn', claude:'ok'};
 function addFiles(files){
   for (const f of files) {
     if (!/^image\//.test(f.type)) { toast(`${f.name}: sube una foto (JPG o PNG), no ${f.type||'este tipo de archivo'}.`); continue; }
     // "Comparar": the same photo read by both, side by side, so the better reading can be saved
     const choice=$('#impEngine').value, url=URL.createObjectURL(f);
-    for (const engineReq of choice==='compare' ? ['deepseek','ocr'] : [choice])
+    for (const engineReq of choice==='compare' ? ['deepseek','paddle'] : [choice])
       IMP.jobs.unshift({id:++IMP.seq, file:f, url, status:'queued', data:null, engineReq});
   }
   renderJobs(); pump();
@@ -686,7 +686,10 @@ async function pump(){
     } else {          // OCR.space: sort the raw text into columns here
       const text=res.text||'';
       if (!text.trim()) throw new Error('No se encontró texto en la foto. Prueba con una foto más clara y derecha.');
-      job.raw=text; job.engine='ocr'; job.data=normalize(parseOcr(text));
+      // with word positions (PaddleOCR, OCR.space overlay) rebuild the table cell by cell; else sort the plain text
+      const pos = res.words?.length ? parsePositional(res.words) : null;
+      job.raw=text; job.engine=res.engine||'ocr';
+      job.data=normalize(pos && pos.rows.length ? pos : parseOcr(text));
     }
     if (!job.data.rows.length && !job.data.totals.length) throw new Error('No encontré renglones con datos en la foto. Revisa que se vea la hoja completa y derecha.');
     job.truckId=truckForSheet(job.data); job.status='review';
@@ -776,6 +779,117 @@ function reconcileFuel(pool, kind){
   else if (inR(n.v,C)) out.cost=n.v;
   else out.left=N;
   return out;
+}
+// ---------- table from word positions (PaddleOCR / OCR.space overlay) ----------
+// Rows come from the printed dates (y), columns from the header words (x); each word goes to the cell it sits in.
+const odoDigits = s => { const d=String(s||'').replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/\D/g,''); return d ? Number(d) : null; };
+function fixOdo(v, ref){
+  // compare with a nearby odometer: restore missing leading digits (104,314 → 1,104,314) or drop one extra digit
+  if (v==null || ref==null || Math.abs(v-ref)<5000) return v;
+  const vs=String(v), rs=String(ref);
+  if (vs.length<rs.length) { const c=Number(rs.slice(0, rs.length-vs.length)+vs); if (Math.abs(c-ref)<5000) return c; }
+  if (vs.length===rs.length+1) for (let i=0;i<vs.length;i++) { const c=Number(vs.slice(0,i)+vs.slice(i+1)); if (Math.abs(c-ref)<5000) return c; }
+  return v;
+}
+function fixFuelCols(gal, cost, price, galReadDecimals=3){
+  // same idea as reconcileFuel but each value already sits in its column; only the "$ read as a digit" slip is tried
+  const V=n=>{ if (n==null) return [{v:null,pen:0}]; const out=[{v:n,pen:0}], s=String(n);
+    if (n>=10 && s.length>2) { const d=Number(s.slice(1)); if (isFinite(d) && d>0) out.push({v:d,pen:1}); } return out; };
+  const G=[5,300], C=[10,2500], P=[2,9.5], inR=(v,[a,b])=>v!=null && v>=a && v<=b;
+  let best=null;
+  for (const g of V(gal)) for (const c of V(cost)) for (const p of V(price)) {
+    let score=(g.v==null||inR(g.v,G)?0:5)+(c.v==null||inR(c.v,C)?0:5)+(p.v==null||inR(p.v,P)?0:5)+g.pen+c.pen+p.pen;
+    if (g.v!=null && c.v!=null && p.v!=null) score+=Math.min(3, Math.abs(g.v*p.v-c.v)/c.v*50);
+    if (!best || score<best.score) best={score, g:g.v, c:c.v, p:p.v, fixed:g.pen+c.pen+p.pen>0};
+  }
+  let {g,c,p}=best, fixed=best.fixed;
+  // gallons are written with 3 decimals; when OCR dropped one ("104.53") and they miss cost ÷ price by a hair,
+  // use the arithmetic. With all 3 decimals read, keep them: a mismatch then is the sheet's own error.
+  if (g && c!=null && p!=null && galReadDecimals<3 &&Math.abs(g*p-c)/c>0.005) { const q=c/p; if (Math.abs(q-g)/g<0.03) { g=Math.round(q*1000)/1000; fixed=true; } }
+  if (g && c!=null && p==null) { const q=c/g; if (inR(q,P)) p=Math.round(q*1000)/1000; }
+  if (g && p!=null && c==null) { const q=g*p; if (inR(q,C)) c=Math.round(q*100)/100; }
+  return {gal:g, cost:c, price:p, fixed};
+}
+function wordsToText(words){
+  // group words into lines by height so the header parser (parseOcr) can read company, truck, month, oil changes
+  const ws=words.map(w=>({...w, cy:w.y+w.h/2})).sort((a,b)=>a.cy-b.cy), lines=[];
+  for (const w of ws) { const L=lines[lines.length-1]; if (L && Math.abs(L.cy-w.cy)<Math.max(8, w.h*0.5)) { L.ws.push(w); } else lines.push({cy:w.cy, ws:[w]}); }
+  return lines.map(L=>L.ws.sort((a,b)=>a.x-b.x).map(w=>w.t).join('\t')).join('\n');
+}
+function parsePositional(words){
+  const W=words.filter(w=>w && w.t && isFinite(w.x)).map(w=>({t:String(w.t).trim(), x0:w.x, y0:w.y, x1:w.x+w.w, y1:w.y+w.h, cx:w.x+w.w/2, cy:w.y+w.h/2}));
+  const head=parseOcr(wordsToText(words));          // header fields + kind from the text
+  if (head.kind==='fuel_report') return null;        // the quarterly report has its own layout: use the text parser
+  const find=re=>W.filter(w=>re.test(w.t.replace(/\s+/g,'')));
+  const dash=find(/^DASHBOARD/i)[0], total=find(/^TOTAL/i)[0], driver=find(/^DRIVER/i)[0];
+  const fuel=find(/^FUEL$/i).sort((a,b)=>a.cx-b.cx);
+  if (!dash || fuel.length<3) return null;
+  const col={dash:dash.cx, total:total?total.cx:(dash.cx+fuel[0].cx)/2, fuelOdo:fuel[0].cx, gal:fuel[1].cx, cost:fuel[2].cx};
+  col.driver = driver ? driver.cx : col.dash-(col.total-col.dash);
+  col.price = col.cost+(col.cost-col.gal);
+  const cols=Object.entries(col), headerY=Math.max(...fuel.map(f=>f.y1));
+  const leftEdge = col.driver-(col.dash-col.driver)*0.6;
+  // printed dates
+  const sheet={month: head.month};
+  let anchors=[];
+  for (const w of W) { if (w.cy<=headerY) continue; const m=w.t.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if (!m) continue;
+    const iso=parseDate(m[0].replace(/\/(\d{2})$/,'/20$1'), sheet); if (iso) anchors.push({date:iso, cy:w.cy}); }
+  anchors.sort((a,b)=>a.cy-b.cy);
+  anchors=anchors.filter((a,i)=>i===0 || a.date>anchors[i-1].date);
+  if (anchors.length<3) return null;
+  const gaps=anchors.slice(1).map((a,i)=>(a.cy-anchors[i].cy)/Math.max(1,(new Date(a.date)-new Date(anchors[i].date))/864e5)).sort((a,b)=>a-b);
+  const spacing=gaps[Math.floor(gaps.length/2)];
+  const addDays=(iso,n)=>{ const d=new Date(iso+'T12:00'); d.setDate(d.getDate()+n); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+  // dates OCR missed: fill gaps between anchors, and one row before the first / after the last when values sit there
+  const filled=[];
+  anchors.forEach((a,i)=>{ if (i) { const prev=anchors[i-1], days=Math.round((new Date(a.date)-new Date(prev.date))/864e5);
+    for (let k=1;k<days;k++) filled.push({date:addDays(prev.date,k), cy:prev.cy+(a.cy-prev.cy)*k/days}); } filled.push(a); });
+  const valueWords=W.filter(w=>w.cy>headerY && w.cx>leftEdge && !/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(w.t));
+  const near=(cy)=>filled.some(a=>Math.abs(a.cy-cy)<spacing*0.6);
+  const first=filled[0], last=filled[filled.length-1];
+  if (valueWords.some(w=>w.cy<first.cy-spacing*0.5 && w.cy>first.cy-spacing*1.6 && !near(w.cy))) filled.unshift({date:addDays(first.date,-1), cy:first.cy-spacing});
+  if (valueWords.some(w=>w.cy>last.cy+spacing*0.5 && w.cy<last.cy+spacing*1.6 && !near(w.cy))) filled.push({date:addDays(last.date,1), cy:last.cy+spacing});
+  // drop words into cells
+  const cells={};
+  for (const w of valueWords) {
+    let best=null; for (const a of filled) { const d=Math.abs(a.cy-w.cy); if (!best || d<best.d) best={a,d}; }
+    if (!best || best.d>spacing*0.7) continue;
+    const c=cols.reduce((b,kv)=>Math.abs(kv[1]-w.cx)<Math.abs(b[1]-w.cx)?kv:b)[0];
+    ((cells[best.a.date] ||= {})[c] ||= []).push(w);
+  }
+  const txt=(cell,sep='')=>(cell||[]).sort((a,b)=>a.x0-b.x0).map(w=>w.t).join(sep);
+  const OFF=/\b[0O]FF\b|OFF|D[UV]T|DUTY|DURY|DUY|DITY|JITY/i;
+  // keep digits, separators and "$"; OCR adds stray marks ("104.53元", "$6.349 D")
+  const clean=s=>s.replace(/^[+t†‡*#~Ss]+(?=\d)/,'$').replace(/[^0-9.,$']/g,'');
+  const money=s=>{ if (!s) return null; const n=readNum(clean(s)); if (!n) return null;
+    if (n.amb) return n.alt;                                              // decimal comma: 95,158
+    return n.v; };
+  const priceOf=s=>{ if (!s) return null; const n=readNum(clean(s)); if (!n) return null;
+    let v=n.amb?n.alt:n.v; if (!n.decimals && v>=1000 && v<10000) v=v/1000;   // "$4599" / "5349"
+    return v; };
+  const rows=[]; let prevOdo=head.newOilChange?.miles ?? null;
+  for (const a of filled) {
+    const c=cells[a.date]; if (!c) continue;
+    const dashT=txt(c.dash,' '), totT=txt(c.total,' ');
+    const off=OFF.test(dashT) || OFF.test(totT);
+    const drv=(c.driver||[]).map(w=>w.t).find(t=>/^[A-Za-z][A-Za-z.'-]{0,11}$/.test(t)) || null;
+    let odo = off ? null : odoDigits(txt(c.dash));
+    if (odo!=null && odo<1000) odo=null;                                  // a stray "0" or a smudge, not an odometer
+    odo=fixOdo(odo, prevOdo);
+    let fuelOdo=odoDigits(txt(c.fuelOdo)); if (fuelOdo!=null && fuelOdo<1000) fuelOdo=null;
+    fuelOdo=fixOdo(fuelOdo, odo ?? prevOdo);
+    const miles = off ? null : (odoDigits(totT) ?? null);
+    const galRaw=clean(txt(c.gal)), galDec=((galRaw.match(/[.,](\d+)$/)||[])[1]||'').length || (galRaw?0:3);
+    const f=fixFuelCols(money(txt(c.gal)), money(txt(c.cost)), priceOf(txt(c.price)), galDec);
+    const any = off || odo!=null || fuelOdo!=null || f.gal!=null || f.cost!=null;
+    if (!any) continue;
+    const lowConf = (c.dash||[]).concat(c.total||[], c.fuelOdo||[], c.gal||[], c.cost||[]).some(w=>/[^0-9.,'$ ]/.test(w.t) && !OFF.test(w.t));
+    rows.push({date:a.date, driver:drv, dashboard:odo, offDuty:off, milesDriven:miles, fuelMiles:fuelOdo,
+      gallons:f.gal, cost:f.cost, pricePerGallon:f.price, unclear: f.fixed || lowConf});
+    if (odo!=null) prevOdo=odo;
+  }
+  return {...head, kind:'monthly_log', rows, monthTotals:[], quarterMiles:null,
+    notes: rows.some(r=>r.unclear) ? 'Revisa los renglones marcados: tenían letras o símbolos mezclados con los números.' : ''};
 }
 // OCR sometimes glues neighbouring cells into one token; split the shapes the form produces
 function splitGlued(t){

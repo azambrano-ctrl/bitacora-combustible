@@ -11,6 +11,9 @@ import Anthropic from "npm:@anthropic-ai/sdk";
 
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const DEEPSEEK_KEY = Deno.env.get("DEEPSEEK_API_KEY");
+// own PaddleOCR server (Hugging Face Space in paddle-server/): PADDLE_URL + PADDLE_TOKEN
+const PADDLE_URL = (Deno.env.get("PADDLE_URL") ?? "").replace(/\/+$/, "");
+const PADDLE_TOKEN = Deno.env.get("PADDLE_TOKEN") ?? "";
 const OCR_KEY = Deno.env.get("OCR_SPACE_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -185,6 +188,31 @@ async function readWithDeepSeek(images: string[]) {
   catch { throw new Error("DeepSeek no devolvió los datos en el formato esperado. Sube la foto otra vez."); }
 }
 
+// ---------------------------------------------------------------- PaddleOCR (own server)
+
+async function readWithPaddle(image: string) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 140_000);   // a sleeping free Space can take a while to wake up
+  try {
+    const r = await fetch(`${PADDLE_URL}/ocr`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Token": PADDLE_TOKEN },
+      body: JSON.stringify({ image }),
+      signal: ctl.signal,
+    });
+    if (r.status === 401) throw new Error("El servidor de PaddleOCR rechazó el token. Revisa PADDLE_TOKEN en Supabase y en el Space.");
+    if (r.status === 503 || r.status === 502) throw new Error("El servidor de PaddleOCR está despertando. Espera un minuto y presiona Leer otra vez.");
+    if (!r.ok) throw new Error(`El servidor de PaddleOCR respondió ${r.status}. Intenta de nuevo en un momento.`);
+    const out: { words?: { t: string; x: number; y: number; w: number; h: number }[]; text?: string } = await r.json();
+    return { words: out.words ?? [], text: out.text ?? "" };
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw new Error("El servidor de PaddleOCR tardó demasiado (puede estar despertando). Presiona Leer otra vez.");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---------------------------------------------------------------- OCR.space (fallback)
 
 async function readWithOcrSpace(image: string) {
@@ -229,10 +257,10 @@ Deno.serve(async (req) => {
   if (!images.length) return reply({ error: "Manda la foto como JPG o PNG." }, 400);
   if (images.some((x) => bytesOf(x) > MAX_IMAGE_BYTES)) return reply({ error: "La foto es demasiado grande. Prueba con una foto más pequeña." }, 413);
 
-  // engine: "deepseek" | "claude" | "ocr" | "auto" (auto = Claude, then DeepSeek, then OCR.space, whichever has a key)
+  // engine: "deepseek" | "paddle" | "claude" | "ocr" | "auto" (auto = Claude, then DeepSeek, then OCR.space, whichever has a key)
   const want = typeof body.engine === "string" ? body.engine : "auto";
   const engine = want === "auto" ? (ANTHROPIC_KEY ? "claude" : DEEPSEEK_KEY ? "deepseek" : "ocr") : want;
-  const missing = { claude: !ANTHROPIC_KEY && "ANTHROPIC_API_KEY", deepseek: !DEEPSEEK_KEY && "DEEPSEEK_API_KEY", ocr: !OCR_KEY && "OCR_SPACE_API_KEY" }[engine as "claude"];
+  const missing = { claude: !ANTHROPIC_KEY && "ANTHROPIC_API_KEY", deepseek: !DEEPSEEK_KEY && "DEEPSEEK_API_KEY", ocr: !OCR_KEY && "OCR_SPACE_API_KEY", paddle: !PADDLE_URL && "PADDLE_URL" }[engine as "claude"];
   if (missing === undefined) return reply({ error: "Lector desconocido." }, 400);
   if (missing) return reply({ error: `Falta la clave ${missing} en los secretos de Supabase.` }, 500);
 
@@ -240,6 +268,7 @@ Deno.serve(async (req) => {
     if (engine === "claude") return reply({ data: await readWithClaude(images.slice(0, 3)), engine });
     if (engine === "deepseek") return reply({ data: await readWithDeepSeek(images.slice(0, 5)), engine });
     const small = typeof body.image === "string" ? body.image : images[0];
+    if (engine === "paddle") return reply({ ...(await readWithPaddle(small)), engine });
     return reply({ ...(await readWithOcrSpace(small)), engine: "ocrspace" });
   } catch (e) {
     if (e instanceof Anthropic.AuthenticationError) return reply({ error: "La clave de Anthropic no es válida. Revisa ANTHROPIC_API_KEY en Supabase." }, 500);
