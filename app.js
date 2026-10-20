@@ -827,6 +827,16 @@ function solveFuelDigits(s, knownPrice=null, odoLen=6){
   }
   return best;
 }
+// a price read without its point and maybe with the "$" as a digit: 55799 → 5.799, 5349 → 5.349.
+// Tries the digits as x.xxx with and without the first one, nearest to cost ÷ gallons when both are known.
+function fixPrice(p, gal, cost){
+  if (p==null || (p>=2 && p<=9.5)) return p;
+  const D=String(p).replace(/\.0+$/,'').replace(/\D/g,''), want = gal && cost ? cost/gal : null, out=[];
+  // 5+ digits: the first is most likely the "$"
+  for (const s of D.length>4 ? [D.slice(1), D] : [D, D.slice(1)]) if (s.length>=2) { const v=Number(s[0]+'.'+s.slice(1,4).padEnd(3,'0')); if (v>=2 && v<=9.5) out.push(v); }
+  if (!out.length) return p;
+  return (want && out.find(v=>Math.abs(v-want)/want<0.005)) || out[0];   // the other reading only when gallons × price = cost
+}
 function fixFuelCols(gal, cost, price, galReadDecimals=3){
   // same idea as reconcileFuel but each value already sits in its column; only the "$ read as a digit" slip is tried
   const V=n=>{ if (n==null) return [{v:null,pen:0}]; const out=[{v:n,pen:0}], s=String(n);
@@ -925,8 +935,8 @@ function parsePositional(words){
   const priceOf=s=>{ if (!s) return null; const cs=clean(s);
     if (lead && /^[.,]\d{3}$/.test(cs)) return Number(lead+'.'+cs.slice(1));
     const n=readNum(cs); if (!n) return null;
-    let v=n.amb?n.alt:n.v; if (!n.decimals && v>=1000 && v<10000) v=v/1000;   // "$4599" / "5349"
-    return v; };
+    const v=n.amb?n.alt:n.v;
+    return v>=10 ? fixPrice(v) : v; };   // "$4599" / "5349" / "55799" ("$" read as 5)
   const rows=[]; let prevOdo=head.newOilChange?.miles ?? null;
   for (const a of filled) {
     const c=cells[a.date]; if (!c) continue;
@@ -1098,6 +1108,7 @@ function normalize(d){
     const s=solveFuelDigits([r.gal,r.cost,okP?null:r.price].filter(v=>v!=null).map(v=>String(v)).join(''), okP?r.price:null);
     if (s) Object.assign(r, {gal:s.gal, cost:s.cost, price:s.price, unclear:true});
   }
+  for (const r of rows) { const p=fixPrice(r.price, r.gal, r.cost); if (p!==r.price) Object.assign(r, {price:p, unclear:true}); }
   rows.sort((a,b)=>(a.date||'9')<(b.date||'9')?-1:1);
   const oil=o=>o&&(o.date||o.miles!=null)?{date:isoOk(o.date)?o.date:null, odo:num(o.miles)}:null;
   const totals=(d.monthTotals||[]).map(m=>({on:true, m:+m.month, y:+m.year||+d.year, cost:num(m.cost), gal:num(m.gallons), price:num(m.pricePerGallon)})).filter(m=>m.m>=1&&m.m<=12&&m.y&&(m.cost!=null||m.gal!=null));
