@@ -641,12 +641,27 @@ async function toJpegDataUrl(file){
   }
   throw new Error('La foto es demasiado grande.');
 }
-IMP.recognize = async dataUrl => {
+// For Claude: the whole sheet plus its top and bottom halves, each about 1,568 px on the long side
+// (the size Claude reads at full detail), so small handwriting stays legible.
+async function sheetViews(file){
+  const bmp=await createImageBitmap(file), out=[];
+  for (const [y0,y1] of [[0,1],[0,.55],[.45,1]]) {
+    const sh=Math.round(bmp.height*(y1-y0)), sy=Math.round(bmp.height*y0);
+    const scale=Math.min(1, 1568/Math.max(bmp.width, sh));
+    const c=document.createElement('canvas'); c.width=Math.round(bmp.width*scale); c.height=Math.round(sh*scale);
+    const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,c.width,c.height); g.drawImage(bmp,0,sy,bmp.width,sh,0,0,c.width,c.height);
+    out.push(c.toDataURL('image/jpeg',.9));
+  }
+  return out;
+}
+// Returns {data} when Claude read the sheet (rows already in columns) or {text} from OCR.space
+IMP.recognize = async file => {
   if (!SB) throw new Error('Falta configurar Supabase (ver README).');
-  const {data, error} = await SB.functions.invoke('read-sheet', {body:{image:dataUrl}});
+  const [image, images] = await Promise.all([toJpegDataUrl(file), sheetViews(file)]);
+  const {data, error} = await SB.functions.invoke('read-sheet', {body:{image, images}});
   if (error) { let msg=''; try { msg=(await error.context.json()).error; } catch(e){} throw new Error(msg || 'No se pudo conectar con el lector de fotos.'); }
   if (data?.error) throw new Error(data.error);
-  return data?.text || '';
+  return data || {};
 };
 function addFiles(files){
   for (const f of files) {
@@ -661,9 +676,16 @@ async function pump(){
   const job=IMP.jobs.slice().reverse().find(j=>j.status==='queued'); if (!job) return;
   IMP.busy=true; job.status='reading'; renderJobs();
   try {
-    const text=await IMP.recognize(await toJpegDataUrl(job.file));
-    if (!text.trim()) throw new Error('No se encontró texto en la foto. Prueba con una foto más clara y derecha.');
-    job.raw=text; job.data=normalize(parseOcr(text)); job.truckId=truckForSheet(job.data); job.status='review';
+    const res=await IMP.recognize(job.file);
+    if (res.data) {   // Claude: every row already in its columns
+      job.raw=null; job.engine='claude'; job.data=normalize(res.data);
+    } else {          // OCR.space: sort the raw text into columns here
+      const text=res.text||'';
+      if (!text.trim()) throw new Error('No se encontró texto en la foto. Prueba con una foto más clara y derecha.');
+      job.raw=text; job.engine='ocr'; job.data=normalize(parseOcr(text));
+    }
+    if (!job.data.rows.length && !job.data.totals.length) throw new Error('No encontré renglones con datos en la foto. Revisa que se vea la hoja completa y derecha.');
+    job.truckId=truckForSheet(job.data); job.status='review';
   } catch(e){ job.status='error'; job.err=e.message||'No se pudo leer la foto. Presiona Leer otra vez.'; }
   IMP.busy=false; renderJobs(); pump();
 }
