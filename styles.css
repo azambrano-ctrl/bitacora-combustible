@@ -216,3 +216,8 @@ label.toggle input{width:22px;height:22px;accent-color:var(--accent)}
 /* US date boxes (MM/DD/YYYY) */
 input.usd{font-variant-numeric:tabular-nums;letter-spacing:.02em}
 input.usd.bad{border-color:var(--bad)!important;box-shadow:0 0 0 1px var(--bad)}
+
+/* vehicle identification fields */
+input.up{text-transform:uppercase}
+.lrow input.plate{flex:0 1 120px;min-width:80px}
+.lrow input.st{flex:0 0 44px;min-width:44px;text-align:center}

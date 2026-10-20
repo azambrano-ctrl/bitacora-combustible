@@ -31,6 +31,8 @@ function isoOf(v){
   if (mo<1||mo>12||d<1||d>new Date(y,mo,0).getDate()) return '';
   return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
+// one line that identifies the vehicle on every sheet and report: unit, make/model, VIN, plate
+const vehicleLine = t => [`Truck # ${t.number}`, t.model, t.vin && `VIN ${t.vin}`, t.plate && `Plate ${t.plate}${t.plateState?' ('+t.plateState+')':''}`].filter(Boolean).join(' · ');
 const USD_ATTRS = 'class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off"';
 const dim = (y,m) => new Date(y,m,0).getDate();
 const safeId = s => String(s).trim().replace(/[^A-Za-z0-9_\-.~]/g,'-');
@@ -152,7 +154,8 @@ function renderLog(){
         <div class="obox"><div class="ol">New Oil Change</div>${hin('oilDate','MM/DD/YYYY',' '+USD_ATTRS)}${hin('oilOdo','millas',' inputmode="numeric"')}</div>
         <div class="lmid"><div class="lt">MONTHLY LOG MILES</div>
           <div class="lrow"><span>COMPANY NAME:</span>${hin('company','nombre de la compañía')}<span>TRUCK # ${esc(t.number)}</span></div>
-          <div class="lrow"><span>MONTH OF: ${MONTH[m-1]}</span><span class="sp"></span><span>YEAR: ${y}</span></div></div>
+          <div class="lrow"><span>MONTH OF: ${MONTH[m-1]}</span><span class="sp"></span><span>YEAR: ${y}</span></div>
+          <div class="lrow"><span>VIN:</span>${hin('vin','17 caracteres',' maxlength="17" class="up"')}<span>PLATE:</span>${hin('plate','placa',' maxlength="10" class="up plate"')}${hin('plateState','ST',' maxlength="2" class="up st"')}</div></div>
         <div class="obox"><div class="ol">Last Oil Change</div>${hin('prevOilDate','MM/DD/YYYY',' '+USD_ATTRS)}${hin('prevOilOdo','millas',' inputmode="numeric"')}</div>
       </div>
       <table class="plog"><thead><tr><th>Day</th><th>Date</th><th>Driver<br>name</th><th>Dashboard<br>miles</th><th>Total miles<br>driven</th><th>Fuel<br>miles</th><th>Fuel<br>glns.</th><th>Fuel<br>cost</th><th>Price<br>per gal</th><th class="fl"></th></tr></thead>
@@ -171,7 +174,7 @@ function refreshLog(){
     ? `<td class="day">${DAY[new Date(b.date+'T12:00').getDay()]}</td><td class="date">${usDate(b.date)}</td><td>${esc(b.driver||'')}</td><td>${fOdo(b.odo)}</td><td>${bm!=null?fOdo(bm):''}</td><td>${fOdo(b.fuelOdo)}</td><td>${b.gal!=null?fGal(b.gal):''}</td><td>${fMoney(costOf(b))}</td><td>${b.price!=null?fPrice(b.price):''}</td><td></td>`
     : `<td></td><td colspan="9">Primer mes: las millas del día 1 se calculan cuando haya una lectura anterior.</td>`;
   const active=document.activeElement;
-  for (const k of ['oilDate','oilOdo','company','prevOilDate','prevOilOdo']) {
+  for (const k of ['oilDate','oilOdo','company','prevOilDate','prevOilOdo','vin','plate','plateState']) {
     const el=$('#lh-'+k); if (!el || el===active) continue;
     const v=t[k]; el.value = v==null ? '' : (k.endsWith('Odo') ? fOdo(v) : k.endsWith('Date') ? usPad(v) : v);
   }
@@ -227,7 +230,7 @@ function quarterReport(t,y,q){
   const sts=months.map(m=>({m,st:monthStats(t.id,y,m)}));
   const title=(t.model?t.model:'TRUCK #'+t.number).toUpperCase();
   let h=`<div class="rpt"><h1>${QN[q]} QUARTER FUEL TAXES, ${MONTH[last-1]} ${y}</h1><h2>${esc(title)} MILES</h2>
-    <div class="meta">${esc(t.company||'')}${t.company?' · ':''}Truck # ${esc(t.number)}</div>`;
+    <div class="meta">${esc(t.company||'')}${t.company?' · ':''}${esc(vehicleLine(t))}</div>`;
   for (const {m,st} of sts) {
     h+=`<h3>${MONTH[m-1]} ${y}, FUELING COST AND GALLONS</h3>`;
     if (!st.fuel.length && st.manualFuel) {
@@ -258,7 +261,7 @@ function logReport(t,y,m){
   const oil = t.oilDate ? `New oil change: ${usDate(t.oilDate)} @ ${fOdo(t.oilOdo)}` : '';
   const prev = t.prevOilDate ? `Last oil change: ${usDate(t.prevOilDate)} @ ${fOdo(t.prevOilOdo)}` : '';
   return `<div class="rpt log"><h1>MONTHLY LOG MILES — ${MONTH[m-1]} ${y}</h1>
-    <div class="meta">Company: ${esc(t.company||'')} · Truck # ${esc(t.number)}${t.model?' · '+esc(t.model):''}</div>
+    <div class="meta">Company: ${esc(t.company||'')} · ${esc(vehicleLine(t))}</div>
     <div class="meta">${[oil,prev].filter(Boolean).join(' · ')}</div><br>
     <table><thead><tr><th>Day</th><th>Date</th><th>Driver</th><th class="n">Dashboard miles</th><th class="n">Total miles driven</th><th class="n">Fuel miles</th><th class="n">Fuel glns.</th><th class="n">Fuel cost</th><th class="n">Price/gal</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="meta">Miles: ${fOdo(st.miles)} · Gallons: ${fGal(st.gal)} · MPG: ${st.mpg?st.mpg.toFixed(2):'—'}</p></div>`;
@@ -291,7 +294,7 @@ function quarterPdf(t,y,q){
   const sts=months.map(m=>({m,st:monthStats(t.id,y,m)})), qo=quarterOdo(t.id,y,q);
   P.center(`${QN[q]} QUARTER FUEL TAXES, ${MONTH[last-1]} ${y}`,13,true);
   P.center(`${(t.model||'TRUCK #'+t.number).toUpperCase()} MILES`,12,true);
-  P.center(`${t.company?t.company+'  -  ':''}Truck # ${t.number}`,9);
+  P.center(`${t.company?t.company+'  -  ':''}${vehicleLine(t).replace(/ · /g,'  -  ')}`,9);
   P.Y+=4;
   const cols={1:RIGHT,2:RIGHT,3:RIGHT};
   for (const {m,st} of sts) {
@@ -326,7 +329,7 @@ function quarterPdf(t,y,q){
 function logPdf(t,y,m){
   const P=pdfBase('landscape'), doc=P.doc, W=P.W, chain=odoChain(t.id), n=dim(y,m), st=monthStats(t.id,y,m);
   // header box like the paper form
-  const x0=PDF_M, w=W-2*PDF_M, bw=130, top=P.Y-14, hh=58;
+  const x0=PDF_M, w=W-2*PDF_M, bw=130, top=P.Y-14, hh=76;
   doc.setDrawColor(30); doc.setLineWidth(1.2); doc.rect(x0,top,w,hh); doc.line(x0+bw,top,x0+bw,top+hh); doc.line(x0+w-bw,top,x0+w-bw,top+hh);
   const txt=(s,x,yy,size,bold,align)=>{ doc.setFont('helvetica',bold?'bold':'normal'); doc.setFontSize(size); doc.setTextColor(17); doc.text(String(s),x,yy,{align:align||'left'}); };
   txt('NEW OIL CHANGE',x0+bw/2,top+13,7.5,true,'center');
@@ -338,6 +341,8 @@ function logPdf(t,y,m){
   doc.setLineWidth(.6); doc.line(mx,top+21,mx+mw,top+21); doc.line(mx,top+40,mx+mw,top+40);
   txt(`COMPANY NAME: ${t.company||''}`,mx+8,top+34,9.5,true); txt(`TRUCK # ${t.number}`,mx+mw-8,top+34,9.5,true,'right');
   txt(`MONTH OF: ${MONTH[m-1]}`,mx+8,top+53,9.5,true); txt(`YEAR: ${y}`,mx+mw-8,top+53,9.5,true,'right');
+  doc.line(mx,top+59,mx+mw,top+59);
+  txt(`VIN: ${t.vin||''}`,mx+8,top+71,9.5,true); txt(`PLATE: ${t.plate||''}${t.plateState?' ('+t.plateState+')':''}`,mx+mw-8,top+71,9.5,true,'right');
   P.Y=top+hh;
   const before=truckEntries(t.id).filter(e=>e.date<`${y}-${pad(m)}-01` && e.odo!=null && !e.off).pop();
   const row=(date,e,carry)=>{ const wd=new Date(date+'T12:00').getDay(), mi=chain.miles[date];
@@ -349,7 +354,7 @@ function logPdf(t,y,m){
     head:[['DAY','DATE','DRIVER NAME','DASHBOARD MILES','TOTAL MILES DRIVEN','FUEL MILES','FUEL GLNS.','FUEL COST','PRICE PER GAL']],
     body:rows.map(r=>r.cells),
     foot:[[{content:`TOTAL ${MONTH[m-1]}`,colSpan:4},fOdo(st.miles),'',fGal(st.gal),fMoney(st.cost),avgOf(st)!=null?fPrice(avgOf(st)):'']],
-    styles:{font:'helvetica',fontSize:8.5,halign:'center',cellPadding:2.2,lineColor:30,lineWidth:.6,textColor:17},
+    styles:{font:'helvetica',fontSize:8.5,halign:'center',cellPadding:1.8,lineColor:30,lineWidth:.6,textColor:17},
     headStyles:{fillColor:false,fontStyle:'bold',fontSize:7.5,valign:'middle'},
     footStyles:{fillColor:[236,239,244],fontStyle:'bold',fontSize:9.5},
     columnStyles:{0:{cellWidth:30},1:{cellWidth:62}},
@@ -375,9 +380,10 @@ function offer(filename, data){
 }
 function csvFor(tid, from, to){
   const chain=odoChain(tid), q=v=>v==null?'':`"${String(v).replace(/"/g,'""')}"`;
-  const lines=['Date,Driver,Dashboard miles,Miles driven,Off duty,Fuel miles,Gallons,Price per gallon,Fuel cost'];
+  const t=S.trucks[tid]||{}, veh=[q(t.number),q(t.vin),q(t.plate),q(t.plateState)].join(',');
+  const lines=['Truck,VIN,Plate,Plate state,Date,Driver,Dashboard miles,Miles driven,Off duty,Fuel miles,Gallons,Price per gallon,Fuel cost'];
   for (const e of truckEntries(tid)) if (e.date>=from && e.date<=to)
-    lines.push([usDate(e.date),q(e.driver),e.odo??'',chain.miles[e.date]??'',e.off?'YES':'',e.fuelOdo??'',e.gal??'',e.price??'',costOf(e)??''].join(','));
+    lines.push([veh,usDate(e.date),q(e.driver),e.odo??'',chain.miles[e.date]??'',e.off?'YES':'',e.fuelOdo??'',e.gal??'',e.price??'',costOf(e)??''].join(','));
   return lines.join('\r\n');
 }
 // editable report sheet: same layout as the printed report, with inputs
@@ -386,7 +392,7 @@ function quarterEdit(t,y,q){
   const title=(t.model?t.model:'TRUCK #'+t.number).toUpperCase();
   const inp=(id,v,cls,ph)=>`<input type="text" id="${id}" class="${cls||''}" value="${esc(v)}" placeholder="${ph||''}" inputmode="decimal" autocomplete="off"${dis}>`;
   let h=`<div class="rpt edit"><h1>${QN[q]} QUARTER FUEL TAXES, ${MONTH[last-1]} ${y}</h1><h2>${esc(title)} MILES</h2>
-    <div class="meta">${esc(t.company||'')}${t.company?' · ':''}Truck # ${esc(t.number)}</div>`;
+    <div class="meta">${esc(t.company||'')}${t.company?' · ':''}${esc(vehicleLine(t))}</div>`;
   const sts=[];
   for (const m of months) {
     const ym=`${y}-${pad(m)}`, st=monthStats(t.id,y,m), man=S.months[t.id+'_'+ym]||{}; sts.push({m,st});
@@ -651,7 +657,7 @@ async function pump(){
   try {
     const text=await IMP.recognize(await toJpegDataUrl(job.file));
     if (!text.trim()) throw new Error('No se encontró texto en la foto. Prueba con una foto más clara y derecha.');
-    job.raw=text; job.data=normalize(parseOcr(text)); job.status='review';
+    job.raw=text; job.data=normalize(parseOcr(text)); job.truckId=truckForSheet(job.data); job.status='review';
   } catch(e){ job.status='error'; job.err=e.message||'No se pudo leer la foto. Presiona Leer otra vez.'; }
   IMP.busy=false; renderJobs(); pump();
 }
@@ -806,10 +812,15 @@ function normalize(d){
   return { kind:d.kind, truck:d.truck?String(d.truck):'', company:d.company||'', month:+d.month||null, year:+d.year||null,
     newOil:oil(d.newOilChange), lastOil:oil(d.lastOilChange), headerOn:true, rows, totals, qm, notes:d.notes||'' };
 }
-function reviewChecks(d){
+// the sheet says "TRUCK # 2021": use that truck when it's registered; otherwise ask (create it or pick one)
+function truckForSheet(d){
+  if (d.truck) { const id=safeId(d.truck); return S.trucks[id] ? id : null; }
+  return S.trucks[S.truckId] ? S.truckId : null;
+}
+function reviewChecks(d, tid){
   // miles from the odometer vs. what the sheet says, cost vs gallons × price, clashes with saved days
   const first=d.rows.find(r=>r.date);
-  let prev = first && S.truckId ? (lastOdoEntry(S.truckId, first.date)?.odo ?? null) : null;
+  let prev = first && tid ? (lastOdoEntry(tid, first.date)?.odo ?? null) : null;
   for (const r of d.rows) {
     r.flags=[]; r.calcMiles=null;
     if (!r.date) r.flags.push(['bad','Falta la fecha']);
@@ -818,7 +829,7 @@ function reviewChecks(d){
     if (r.sheetMiles!=null && r.calcMiles!=null && r.sheetMiles!==r.calcMiles) r.flags.push(['warn',`La hoja dice ${fOdo(r.sheetMiles)}; el odómetro da ${fOdo(r.calcMiles)}`]);
     if (r.gal!=null && r.price!=null && r.cost!=null && Math.abs(r.gal*r.price-r.cost)>0.05) r.flags.push(['warn',`Galones × precio = ${fMoney(r2(r.gal*r.price))}`]);
     if (r.unclear) r.flags.push(['warn','Letra difícil: revisa']);
-    const ex=r.date && S.entries[S.truckId+'_'+r.date];
+    const ex=r.date && tid && S.entries[tid+'_'+r.date];
     if (ex && ((r.odo!=null && ex.odo!=null && ex.odo!==r.odo) || (r.gal!=null && ex.gal!=null && ex.gal!==r.gal))) r.flags.push(['bad','Ya hay otros datos guardados este día: se reemplazan']);
   }
 }
@@ -827,7 +838,7 @@ function renderJobs(){
   const a=document.activeElement, keep = a && box.contains(a) && a.id ? a.id : null;
   box.innerHTML = IMP.jobs.map(j=>{
     const stat = j.status==='queued' ? 'En espera…' : j.status==='reading' ? 'Leyendo la hoja… puede tardar hasta un minuto.'
-      : j.status==='error' ? j.err : j.status==='saved' ? j.savedMsg : 'Listo: revisa los datos y guarda.';
+      : j.status==='error' ? j.err : j.status==='saved' ? j.savedMsg : j.status==='saving' ? 'Guardando…' : 'Listo: revisa los datos y guarda.';
     const cls = j.status==='error' ? 'err' : j.status==='saved' ? 'ok' : '';
     const btn = j.status==='reading' ? ''
       : j.status==='error' ? `<button class="btn" data-retry="${j.id}">Leer otra vez</button><button class="btn" data-drop="${j.id}">Quitar</button>`
@@ -838,11 +849,15 @@ function renderJobs(){
   if (keep) document.getElementById(keep)?.focus();
 }
 function reviewHTML(j){
-  const d=j.data; reviewChecks(d);
+  const d=j.data, tid=j.truckId; reviewChecks(d, tid);
   const kind = d.kind==='monthly_log' ? 'Hoja mensual' : d.kind==='fuel_report' ? 'Reporte de fuel taxes' : 'No reconocida';
   const trucks=Object.values(S.trucks);
-  const tsel = trucks.length ? `<select id="jt-${j.id}" data-jt="${j.id}">${trucks.map(t=>`<option value="${esc(t.id)}"${t.id===S.truckId?' selected':''}>#${esc(t.number)}</option>`).join('')}</select>` : '<span class="chip bad">Agrega un camión primero</span>';
-  const mismatch = d.truck && S.trucks[S.truckId] && safeId(d.truck)!==S.truckId ? `<span class="chip warn">La foto dice truck #${esc(d.truck)}</span>` : '';
+  const tsel = trucks.length ? `<select id="jt-${j.id}" data-jt="${j.id}">${tid?'':'<option value="" selected>— Escoge el camión —</option>'}${trucks.map(t=>`<option value="${esc(t.id)}"${t.id===tid?' selected':''}>#${esc(t.number)}${t.plate?' · '+esc(t.plate):''}</option>`).join('')}</select>` : '';
+  const exists = d.truck && S.trucks[safeId(d.truck)];
+  const mismatch = !d.truck ? `<span class="chip warn">No encontré el número de camión en la hoja: escógelo</span>`
+    : !exists ? `<span class="chip warn">La hoja dice truck #${esc(d.truck)}, que no está registrado</span> ${S.canWrite?`<button class="btn" data-mktruck="${j.id}">Crear truck #${esc(d.truck)}</button>`:''}`
+    : tid===safeId(d.truck) ? `<span class="chip ok">Detectado en la hoja: truck #${esc(d.truck)}</span>`
+    : `<span class="chip warn">La hoja dice truck #${esc(d.truck)}</span>`;
   const inp=(r,k,v,w)=>`<input type="text" id="jr-${j.id}-${r.i}-${k}" data-j="${j.id}" data-r="${r.i}" data-k="${k}" value="${esc(v)}" style="min-width:${w}px" autocomplete="off">`;
   const rows=d.rows.map(r=>`<tr class="${!r.on?'skip':r.flags.length?'warn':''}">
       <td><input type="checkbox" id="jr-${j.id}-${r.i}-on" data-j="${j.id}" data-r="${r.i}" data-k="on"${r.on?' checked':''} aria-label="Importar renglón"></td>
@@ -862,15 +877,23 @@ function reviewHTML(j){
   if (d.qm) ex.push(`<label><input type="checkbox" data-j="${j.id}" data-x="qm" id="jx-${j.id}-q"${d.qm.on?' checked':''}> Odómetros del trimestre: apertura ${d.qm.startDate?usDate(d.qm.startDate):''} ${fOdo(d.qm.start)} · cierre ${d.qm.endDate?usDate(d.qm.endDate):''} ${fOdo(d.qm.end)}</label>`);
   return `<div class="jmeta"><div><span class="k">Tipo</span><span class="v">${kind}</span></div>
       ${d.month?`<div><span class="k">Mes</span><span class="v">${MONTH[d.month-1]} ${d.year||''}</span></div>`:''}
-      <div><span class="k">Guardar en el camión</span>${tsel} ${mismatch}</div>
+      <div><span class="k">Camión de esta hoja</span>${tsel} ${mismatch}</div>
       <div><span class="k">Renglones</span><span class="v">${nOn} a guardar${nWarn?` · <span class="chip warn">${nWarn} por revisar</span>`:''}</span></div></div>
-    ${d.notes?`<div class="jstat">Nota: ${esc(d.notes)}</div>${j.raw?`<details><summary class="jstat">Ver el texto que leyó OCR</summary><pre class="rawocr">${esc(j.raw)}</pre></details>`:""}`:''}
+    ${d.notes?`<div class="jstat">Nota: ${esc(d.notes)}</div>`:''}${j.raw?`<details><summary class="jstat">Ver el texto que leyó OCR</summary><pre class="rawocr">${esc(j.raw)}</pre></details>`:''}
     ${d.rows.length?`<div class="scroll"><table class="rv"><thead><tr><th></th><th>Date</th><th>Driver</th><th>Dashboard miles</th><th style="text-align:right">Miles driven</th><th>Fuel miles</th><th>Fuel glns.</th><th>Fuel cost</th><th>Price/gal</th><th>Revisar</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="jstat">No se encontraron renglones de días o cargas.</div>'}
     ${ex.length?`<div class="extras">${ex.join('')}</div>`:''}
-    <div class="jact"><button class="btn primary" data-save="${j.id}"${!S.canWrite||!S.trucks[S.truckId]?' disabled':''}>Guardar en la hoja</button><button class="btn" data-drop="${j.id}">Descartar</button></div>`;
+    <div class="jact"><button class="btn primary" data-save="${j.id}"${!S.canWrite||!S.trucks[tid]?' disabled':''}>Guardar en truck #${esc(S.trucks[tid]?.number||'—')}</button><button class="btn" data-drop="${j.id}">Descartar</button></div>`;
 }
-function saveJob(j){
-  const d=j.data, t=S.trucks[S.truckId]; if (!t || !S.canWrite) return;
+async function patchEntryFresh(date, patch){
+  const id=S.truckId+'_'+date;
+  if (!S.entries[id] && S.db) { try { const snap=await S.db.collection('entries').doc(id).get(); if (snap.exists) S.entries[id]={...snap.data()}; } catch(e){} }
+  patchEntry(date, patch);
+}
+async function saveJob(j){
+  const d=j.data; if (!S.trucks[j.truckId] || !S.canWrite) return;
+  if (j.truckId!==S.truckId) { S.truckId=j.truckId; S.tdDirty=false; truckOptions(); subscribeEntries(); refreshAll(); }
+  const t=S.trucks[S.truckId];
+  j.status='saving'; renderJobs();
   let n=0; const months=new Set();
   for (const r of d.rows) {
     if (!r.on || !r.date) continue;
@@ -880,7 +903,7 @@ function saveJob(j){
     if (r.fuelOdo!=null) p.fuelOdo=r.fuelOdo;
     if (r.gal!=null || r.cost!=null || r.price!=null) Object.assign(p, completeFuel({gal:r.gal, price:r.price, cost:r.cost}));
     if (!Object.keys(p).length) continue;
-    patchEntry(r.date, p); n++; months.add(r.date.slice(0,7));
+    await patchEntryFresh(r.date, p); n++; months.add(r.date.slice(0,7));
   }
   if (d.headerOn && (d.company || d.newOil || d.lastOil)) {
     const up={...t};
@@ -905,7 +928,7 @@ function saveJob(j){
 }
 function onReviewEdit(e){
   const el=e.target, j=IMP.jobs.find(x=>x.id===+el.dataset.j); if (!j || !j.data) return;
-  if (el.dataset.jt) { S.truckId=el.value; S.tdDirty=false; truckOptions(); subscribeEntries(); refreshAll(); renderJobs(); return; }
+  if (el.dataset.jt) { j.truckId=el.value||null; renderJobs(); return; }
   if (el.dataset.x) {
     if (el.dataset.x==='header') j.data.headerOn=el.checked;
     if (el.dataset.x==='tot') j.data.totals[+el.dataset.n].on=el.checked;
@@ -929,6 +952,7 @@ function renderTrucks(){
     const cur=odoChain(t.id).current;
     return `<div class="truck"><h3>Truck #${esc(t.number)}</h3><dl>
       <dt>Compañía</dt><dd>${esc(t.company||'—')}</dd><dt>Modelo</dt><dd>${esc(t.model||'—')}</dd>
+      <dt>VIN</dt><dd>${esc(t.vin||'—')}</dd><dt>Placa</dt><dd>${t.plate?esc(t.plate)+(t.plateState?' ('+esc(t.plateState)+')':''):'—'}</dd>
       <dt>Chofer</dt><dd>${esc(t.driver||'—')}</dd><dt>Odómetro actual</dt><dd>${cur!=null?fOdo(cur):'—'}</dd>
       <dt>Último aceite</dt><dd>${t.oilDate?usDate(t.oilDate)+' @ '+fOdo(t.oilOdo):'—'}</dd>
       <dt>Aceite anterior</dt><dd>${t.prevOilDate?usDate(t.prevOilDate)+' @ '+fOdo(t.prevOilOdo):'—'}</dd></dl>
@@ -940,7 +964,7 @@ function renderTrucks(){
 }
 function fillForm(t){
   $('#tfTitle').textContent = t ? `Editar truck #${t.number}` : 'Agregar camión';
-  $('#tfNum').value=t?.number||''; $('#tfNum').disabled=!!t; $('#tfCo').value=t?.company||''; $('#tfModel').value=t?.model||'';
+  $('#tfNum').value=t?.number||''; $('#tfNum').disabled=!!t; $('#tfCo').value=t?.company||''; $('#tfModel').value=t?.model||''; $('#tfVin').value=t?.vin||''; $('#tfPlate').value=t?.plate||''; $('#tfState').value=t?.plateState||'';
   $('#tfDriver').value=t?.driver||''; $('#tfPrevDate').value=usPad(t?.prevOilDate); $('#tfPrevOdo').value=t?.prevOilOdo??'';
   $('#tfOilDate').value=usPad(t?.oilDate); $('#tfOilOdo').value=t?.oilOdo??''; $('#tfInt').value=t?.oilInterval??20000;
   $('#tfCancel').hidden=!t; S.editing=t?t.id:null;
@@ -950,7 +974,7 @@ function fillForm(t){
 function truckOptions(){
   const sel=$('#truckSel'), list=Object.values(S.trucks).sort((a,b)=>a.number.localeCompare(b.number,undefined,{numeric:true}));
   if (!S.truckId || !S.trucks[S.truckId]) S.truckId = list[0]?.id || null;
-  sel.innerHTML = list.length ? list.map(t=>`<option value="${esc(t.id)}"${t.id===S.truckId?' selected':''}>#${esc(t.number)}${t.model?' · '+esc(t.model):''}</option>`).join('') : '<option>Sin camiones</option>';
+  sel.innerHTML = list.length ? list.map(t=>`<option value="${esc(t.id)}"${t.id===S.truckId?' selected':''}>#${esc(t.number)}${t.model?' · '+esc(t.model):''}${t.plate?' · '+esc(t.plate):''}</option>`).join('') : '<option>Sin camiones</option>';
   sel.disabled=!list.length;
 }
 function trucksChanged(){ const before=S.truckId; truckOptions(); if (S.truckId!==before) subscribeEntries(); refreshAll(); }
@@ -1005,10 +1029,18 @@ $('#impList').addEventListener('change', onReviewEdit);
 $('#impList').addEventListener('keydown', e=>{ if (e.key==='Enter' && e.target.tagName==='INPUT') { e.preventDefault(); e.target.blur(); } });
 $('#impList').addEventListener('click', e=>{
   const b=e.target.closest('button'); if (!b) return;
-  const id=+(b.dataset.retry||b.dataset.drop||b.dataset.save||b.dataset.view), j=IMP.jobs.find(x=>x.id===id); if (!j) return;
+  const id=+(b.dataset.retry||b.dataset.drop||b.dataset.save||b.dataset.view||b.dataset.mktruck), j=IMP.jobs.find(x=>x.id===id); if (!j) return;
   if (b.dataset.retry) { j.status='queued'; renderJobs(); pump(); }
   if (b.dataset.drop) { URL.revokeObjectURL(j.url); IMP.jobs=IMP.jobs.filter(x=>x!==j); renderJobs(); }
   if (b.dataset.save) saveJob(j);
+  if (b.dataset.mktruck && j.data?.truck) {
+    const d=j.data, id=safeId(d.truck);
+    writeTruck(id, {id, number:d.truck, company:d.company||'', model:'', vin:null, plate:null, plateState:null,
+      driver:(d.rows.find(r=>r.driver)||{}).driver||'', oilDate:d.newOil?.date||null, oilOdo:d.newOil?.odo??null,
+      prevOilDate:d.lastOil?.date||null, prevOilOdo:d.lastOil?.odo??null, oilInterval:20000});
+    S.trucks[id] ||= {id, number:d.truck};
+    j.truckId=id; toast(`Truck #${d.truck} creado. Completa su VIN y placa en Camiones.`); renderJobs();
+  }
   if (b.dataset.view && j.view) { $('#monthSel').value=j.view; $('#monthSel').dispatchEvent(new Event('change')); document.querySelector('nav.tabs [data-tab="log"]').click(); window.scrollTo({top:0,behavior:'smooth'}); }
 });
 $('#todayForm').addEventListener('input', e=>{ if (e.target.id==='tdDate') return; S.tdDirty=true; $('#tdStatus').textContent=''; renderTodayCalc(); });
@@ -1026,7 +1058,8 @@ $('#logBody').addEventListener('change',e=>{
   const k=e.target.dataset.t, t=S.trucks[S.truckId];
   if (k && t) {   // sheet header: oil changes and company belong to the truck
     const v = k.endsWith('Odo') ? num(e.target.value) : k.endsWith('Date') ? (isoOf(e.target.value)||null) : (e.target.value.trim()||null);
-    writeTruck(S.truckId, {...t, [k]: k==='company' ? (v||'') : v});
+    writeTruck(S.truckId, {...t, [k]: k==='company' ? (v||'') : ['vin','plate','plateState'].includes(k) ? (v ? v.toUpperCase().replace(/\s+/g,'') : null) : v});
+    if (k==='vin' && v && v.replace(/\s+/g,'').length!==17) toast('El VIN normalmente tiene 17 caracteres; revísalo.');
     return;
   }
   const tr=e.target.closest('tr[data-date]'); if (tr) saveRow(tr);
@@ -1059,10 +1092,11 @@ $('#truckForm').addEventListener('submit',async e=>{
   const number=$('#tfNum').value.trim(); if(!number) return;
   const id=S.editing||safeId(number);
   if (!S.editing && S.trucks[id]) { toast(`El truck #${number} ya existe. Usa Editar.`); return; }
-  const data={ id, number, company:$('#tfCo').value.trim(), model:$('#tfModel').value.trim(), driver:$('#tfDriver').value.trim(),
+  const data={ id, number, company:$('#tfCo').value.trim(), model:$('#tfModel').value.trim(),
+    vin:$('#tfVin').value.replace(/\s+/g,'').toUpperCase()||null, plate:$('#tfPlate').value.replace(/\s+/g,'').toUpperCase()||null, plateState:$('#tfState').value.trim().toUpperCase()||null, driver:$('#tfDriver').value.trim(),
     prevOilDate:isoOf($('#tfPrevDate').value)||null, prevOilOdo:num($('#tfPrevOdo').value), oilDate:isoOf($('#tfOilDate').value)||null,
     oilOdo:num($('#tfOilOdo').value), oilInterval:num($('#tfInt').value)||20000 };
-  await writeTruck(id,data); S.truckId=id; fillForm(null); toast(`Truck #${number} guardado.`);
+  await writeTruck(id,data); S.truckId=id; fillForm(null); toast(data.vin && data.vin.length!==17 ? `Truck #${number} guardado. Revisa el VIN: normalmente tiene 17 caracteres.` : `Truck #${number} guardado.`);
   if (!S.db) trucksChanged();
 });
 
@@ -1121,6 +1155,7 @@ function makeDb(sb){
         onSnapshot(next, error){ return query(collection, null).onSnapshot(next, error); },
         doc(id){
           return {
+            async get(){ const {data,error}=await sb.from(T).select('data').eq('collection',collection).eq('id',id).maybeSingle(); if (error) throw error; return {id, exists:!!data, data:()=>data?.data}; },
             async set(data){ const {error}=await sb.from(T).upsert({collection, id, truck: data.truck ?? (collection==='trucks'?id:null), data}); if (error) throw error; },
             async delete(){ const {error}=await sb.from(T).delete().eq('collection',collection).eq('id',id); if (error) throw error; },
           };

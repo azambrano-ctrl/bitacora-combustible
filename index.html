@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Kalam:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <div id="authScreen" class="auth" hidden>
@@ -122,6 +122,9 @@
       <label class="fld" for="tfNum">Número de camión<input id="tfNum" required placeholder="2021"></label>
       <label class="fld" for="tfCo">Compañía<input id="tfCo" placeholder="Blackhawk Trans Inc."></label>
       <label class="fld" for="tfModel">Modelo<input id="tfModel" placeholder="Freightliner Cascadia 2017"></label>
+      <label class="fld" for="tfVin">VIN (número de serie)<input id="tfVin" maxlength="17" class="up" placeholder="1FUJGLDR5HLxxxxxx" autocomplete="off"></label>
+      <label class="fld" for="tfPlate">Placa<input id="tfPlate" maxlength="10" class="up" placeholder="ABC1234" autocomplete="off"></label>
+      <label class="fld" for="tfState">Estado de la placa<input id="tfState" maxlength="2" class="up" placeholder="TX" autocomplete="off"></label>
       <label class="fld" for="tfDriver">Chofer habitual<input id="tfDriver" placeholder="Jr."></label>
       <label class="fld" for="tfPrevDate">Cambio de aceite anterior<input type="text" class="usd" inputmode="numeric" maxlength="10" placeholder="MM/DD/YYYY" autocomplete="off" id="tfPrevDate"></label>
       <label class="fld" for="tfPrevOdo">Millas en ese cambio<input type="number" id="tfPrevOdo" inputmode="numeric"></label>
@@ -141,6 +144,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
