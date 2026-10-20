@@ -745,11 +745,21 @@ function reconcileFuel(pool, kind){
   if (best) return {gal:best.gal, cost:best.cost, price:best.price, fixed:best.fixed, left:N-best.used.length};
   // a single number: decide by its shape
   const n=pool[0], out={gal:null, cost:null, price:null, fixed:false, left:N-1};
-  if (n.decimals===3 && inR(n.v,G) && !n.dollar) out.gal=n.v;
-  else if (inR(n.v,P)) out.price=n.v;
+  if (inR(n.v,P) && n.v<10) out.price=n.v;                       // 5.349 alone is a price, not 5 gallons
+  else if (n.decimals===3 && inR(n.v,G) && !n.dollar) out.gal=n.v;
   else if (inR(n.v,C)) out.cost=n.v;
   else out.left=N;
   return out;
+}
+// OCR sometimes glues neighbouring cells into one token; split the shapes the form produces
+function splitGlued(t){
+  let m;
+  if ((m=t.match(/^([A-Za-z]{2,}\.?)([\d$'].*)$/))) return [m[1], ...splitGlued(m[2])];                  // "Jr.122,635"
+  if ((m=t.match(/^(\d{1,3}[,']\d{3}(?:[,']\d{3})?)(\d{1,3}[.,]\d{3})$/))) return [m[1], m[2]];          // odometer + gallons "122,635107.945"
+  if ((m=t.match(/^(\d{1,3}[.,]\d{3})([$+t]?\d{1,4}[.,]\d{2})$/))) return [m[1], m[2]];                  // gallons + cost "107.9451577.40"
+  if ((m=t.match(/^(\d{1,3}[.,]\d{3})([$+t]?\d[.,]\d{3})$/))) return [m[1], m[2]];                       // gallons + price "107.9455.349"
+  if ((m=t.match(/^([$+t]?\d{1,4}\.\d{2})([$+t]?\d\.\d{3})$/))) return [m[1], m[2]];                     // cost + price "577.405.349" (dots only, so 1,096,060 never splits)
+  return [t];
 }
 function parseOcr(text){
   const lines=text.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean);
@@ -766,7 +776,7 @@ function parseOcr(text){
   const headerDates=[], headerOdos=[]; let seenRow=false, unplaced=0;
   for (const line of lines) {
     // "$502.71$4.319" → "$502.71 $4.319" · "$ 502.71" → "$502.71"
-    const toks=line.replace(/([^\s$])\$/g,'$1 $').replace(/\$\s+(?=[\dOoSB])/g,'$').split(/[\t ]+/).filter(Boolean);
+    const toks=line.replace(/([^\s$])\$/g,'$1 $').replace(/\$\s+(?=[\dOoSB])/g,'$').split(/[\t ]+/).filter(Boolean).flatMap(splitGlued);
     if (/^TOTAL/i.test(line)) continue;
     if (!seenRow && /COMPANY|MONTH\s*OF|YEAR\s*:|TRUCK\s*#|OIL\s*CHANGE/i.test(line)) {   // sheet header: oil change dates and odometers, left box first
       toks.forEach(t=>{ const d=parseDate(t,null); if (d) headerDates.push(d); });
@@ -891,7 +901,8 @@ function reviewChecks(d, tid){
     if (r.gal!=null && r.price!=null && r.cost!=null && Math.abs(r.gal*r.price-r.cost)>0.05) r.flags.push(['warn',`Galones × precio = ${fMoney(r2(r.gal*r.price))}`]);
     if (r.gal!=null && (r.gal<5 || r.gal>300)) r.flags.push(['bad',`Galones fuera de rango: ${fGal(r.gal)}`]);
     if (r.price!=null && (r.price<2 || r.price>9)) r.flags.push(['warn',`Precio por galón raro: ${fPrice(r.price)}`]);
-    if (r.unclear) r.flags.push(['warn','Letra difícil: revisa']);
+    if (r.unclear && !r.off && r.odo==null && r.fuelOdo!=null) r.flags.push(['warn','La hoja no trae el odómetro del tablero este día']);
+    else if (r.unclear) r.flags.push(['warn','Letra difícil: revisa']);
     const ex=r.date && tid && S.entries[tid+'_'+r.date];
     if (ex && ((r.odo!=null && ex.odo!=null && ex.odo!==r.odo) || (r.gal!=null && ex.gal!=null && ex.gal!==r.gal))) r.flags.push(['bad','Ya hay otros datos guardados este día: se reemplazan']);
   }
