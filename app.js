@@ -674,7 +674,10 @@ const monthOf = w => { const k=String(w||'').toUpperCase().replace(/[^A-Z]/g,'')
 const DATE_RE = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/;
 function readNum(t){
   // "1'096,060" → 1096060 · "$348.66" → 348.66 · "109.409" → 109.409 (3 decimals = gallons/price) · OCR slips O→0, l→1
-  let raw=String(t).trim().replace(/[;:,.'"`]+$/,''); const dollar=raw.includes('$');
+  let raw=String(t).trim().replace(/[;:,.'"`]+$/,'');
+  // a handwritten "$" read as +, t, †, *, # or S in front of an amount ("+593.24", "t523.27", "S595.44")
+  raw=raw.replace(/^[+t†‡*#~]+(?=\d)/,'$').replace(/^[Ss](?=\d+[.,]\d{2}$)/,'$');
+  const dollar=raw.includes('$');
   let s=raw.replace(/\$/g,'');
   // handwriting slips: O→0, l/I/|→1, S→5, B→8, Z→2 (only inside tokens that already have digits)
   if (/\d/.test(s)) s=s.replace(/[Oo]/g,'0').replace(/[lI|]/g,'1').replace(/[Ss](?=\d)/g,'5').replace(/B/g,'8').replace(/[Zz]/g,'2');
@@ -701,6 +704,52 @@ function parseDate(tok, sheet){
   // a row like 2/28 on an August sheet is a slip of the pen: use the sheet's month
   if (sheet && sheet.month && mo!==sheet.month && mo!==((sheet.month+10)%12)+1 && d<=dim(y,sheet.month)) mo=sheet.month;
   return `${y}-${pad(mo)}-${pad(d)}`;
+}
+// Handwritten "$" is often read as a 5, 1 or S glued to the number: "$5.299" → 55.299, "$523.27" → 1523.27.
+// Try each number as read and with that first digit removed, and keep the reading where
+// gallons (5–300) × price (2–9.5) = cost (10–2,500). With only two numbers, the third is worked out.
+function reconcileFuel(pool, kind){
+  const variants = n => {
+    const out=[{v:n.v, pen:0}], s=String(n.v);
+    if (n.v>=10 && s.length>2) { const d=Number(s.slice(1)); if (isFinite(d) && d>0) out.push({v:d, pen:1}); }
+    if (n.dollar && n.decimals===0 && n.v>=1000 && n.v<10000) out.push({v:n.v/1000, pen:0.2});   // "$5349" = $5.349
+    return out;
+  };
+  const decPen = (n, want) => n.decimals===want ? 0 : 0.3;
+  const G=[5,300], C=[10,2500], P=[2,9.5], inR=(v,[a,b])=>v>=a&&v<=b;
+  const r3=x=>Math.round(x*1000)/1000, r2=x=>Math.round(x*100)/100;
+  let best=null;
+  const consider = (score, gal, cost, price, used, fixed) => { if (!best || score<best.score) best={score, gal, cost, price, used, fixed}; };
+  const N=pool.length;
+  for (let gi=0; gi<N; gi++) for (const g of variants(pool[gi])) { if (!inR(g.v,G)) continue;
+    for (let ci=0; ci<N; ci++) { if (ci===gi) continue;
+      for (const c of variants(pool[ci])) { if (!inR(c.v,C)) continue;
+        let paired=false;
+        for (let pi=0; pi<N; pi++) { if (pi===gi || pi===ci) continue;
+          for (const p of variants(pool[pi])) { if (!inR(p.v,P)) continue;
+            const err=Math.abs(g.v*p.v-c.v)/c.v, pens=g.pen+c.pen+p.pen+decPen(pool[gi],3)+decPen(pool[ci],2)+decPen(pool[pi],3);
+            if (err<0.015) { paired=true; consider(err*50 + pens, g.v, c.v, p.v, [gi,ci,pi], g.pen+c.pen+p.pen>0); }
+            // all three read but the sheet's own math is off: keep what is written (the review flags it)
+            else if (!g.pen && !c.pen && !p.pen) consider(3 + pens, g.v, c.v, p.v, [gi,ci,pi], false);
+          }
+        }
+        const p=c.v/g.v;   // price missing or unreadable: work it out from cost ÷ gallons
+        if (!paired && inR(p,P)) consider(2 + (N>=3 ? 2 : 0) + g.pen+c.pen + decPen(pool[gi],3)+decPen(pool[ci],2), g.v, c.v, r3(p), [gi,ci], g.pen+c.pen>0);
+      }
+    }
+    for (let pi=0; pi<N; pi++) { if (pi===gi) continue;   // cost missing: gallons × price
+      for (const p of variants(pool[pi])) { if (!inR(p.v,P)) continue;
+        const c=g.v*p.v; if (inR(c,C)) consider(2.5 + (N>=3 ? 2 : 0) + g.pen+p.pen + decPen(pool[gi],3)+decPen(pool[pi],3), g.v, r2(c), p.v, [gi,pi], g.pen+p.pen>0); }
+    }
+  }
+  if (best) return {gal:best.gal, cost:best.cost, price:best.price, fixed:best.fixed, left:N-best.used.length};
+  // a single number: decide by its shape
+  const n=pool[0], out={gal:null, cost:null, price:null, fixed:false, left:N-1};
+  if (n.decimals===3 && inR(n.v,G) && !n.dollar) out.gal=n.v;
+  else if (inR(n.v,P)) out.price=n.v;
+  else if (inR(n.v,C)) out.cost=n.v;
+  else out.left=N;
+  return out;
 }
 function parseOcr(text){
   const lines=text.replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean);
@@ -760,21 +809,16 @@ function parseOcr(text){
         n = {v:n.alt, decimals:3, dollar:false};
       }
       if (n.decimals===0 && n.v>=100000) odos.push(n.v);
-      else if (n.decimals>=2 && n.v>=2 && n.v<10) r.pricePerGallon ??= n.v;
-      else if (n.dollar && n.decimals===0 && n.v>=2000 && n.v<10000 && String(n.v).length===4) r.pricePerGallon ??= n.v/1000;   // "$5349" = $5.349
-      else if (n.decimals>0 && n.v>=10 && n.v<5000) money.push(n);                                              // gallons or cost
-      else if (n.decimals===0 && n.v<=1500 && r.milesDriven==null) r.milesDriven=n.v;
+      else if (n.decimals>0 || n.dollar) money.push(n);                                     // gallons, cost or price
+      else if (n.v<=1500 && r.milesDriven==null) r.milesDriven=n.v;
       else extra++;
     }
-    // gallons vs cost: a $ sign or 3 decimals decide; otherwise use the column order of the form
-    // (monthly log: FUEL GLNS. then FUEL COST · fuel taxes report: FUELING PRICE then FUELING GALLONS)
+    // gallons, cost and price: pick the reading where gallons × price = cost
     if (money.length) {
-      let gal = money.find(n=>n.decimals===3 && !n.dollar), cost = money.find(n=>n.dollar && n!==gal);
-      const rest = money.filter(n=>n!==gal && n!==cost);
-      if (!gal && !cost && rest.length>=2) { [cost,gal] = out.kind==='fuel_report' ? [rest[0],rest[1]] : [rest[1],rest[0]]; }
-      else { if (!cost) cost = rest.find(n=>n!==gal); if (!gal) gal = rest.find(n=>n!==cost); }
-      if (gal) r.gallons=gal.v; if (cost) r.cost=cost.v;
-      extra += money.filter(n=>n!==gal && n!==cost).length;
+      const f=reconcileFuel(money, out.kind);
+      r.gallons=f.gal; r.cost=f.cost; r.pricePerGallon=f.price;
+      if (f.fixed) r.unclear=true;
+      extra += f.left;
     }
     if (out.kind==='fuel_report' && odos.length && r.gallons==null && r.cost==null) {   // quarter miles table: date + odometer
       out.quarterMiles ||= {closingDate:null, closing:null, openingDate:null, opening:null};
