@@ -152,24 +152,34 @@ async function readWithDeepSeek(images: string[]) {
       "\n\nReply with only one JSON object (no other text) that follows this JSON Schema:\n" + JSON.stringify(SHEET_SCHEMA) },
     ...images.map((url) => ({ type: "image_url", image_url: { url } })),
   ];
-  const call = (jsonMode: boolean) => fetch("https://api.deepseek.com/chat/completions", {
+  // deepseek-flash thinks before answering and the reasoning shares the output budget, so give it room
+  // (64K is its default in thinking mode); if it still runs out, retry once thinking less.
+  const call = (jsonMode: boolean, effort: string) => fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${DEEPSEEK_KEY}` },
     body: JSON.stringify({
-      model: "deepseek-flash", max_tokens: 8000, temperature: 0,
+      model: "deepseek-flash", max_tokens: 64000, reasoning_effort: effort,
       ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       messages: [{ role: "user", content }],
     }),
   });
-  let r = await call(true);
-  if (r.status === 400) r = await call(false);   // JSON mode not accepted with images: plain reply
-  if (r.status === 401) throw new Error("La clave de DeepSeek no es válida. Revisa DEEPSEEK_API_KEY en Supabase.");
-  if (r.status === 402) throw new Error("Tu cuenta de DeepSeek no tiene saldo. Recarga en platform.deepseek.com.");
-  if (r.status === 429) throw Object.assign(new Error("Se hicieron muchas lecturas seguidas. Espera un minuto y vuelve a intentar."), { status: 429 });
-  if (!r.ok) throw new Error(`DeepSeek respondió ${r.status}. Intenta de nuevo en un momento.`);
-  const out: { choices?: { message?: { content?: string }; finish_reason?: string }[] } = await r.json();
+  const started = Date.now();
+  type DsOut = { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+  let out: DsOut = {}, jsonMode = true;
+  for (const effort of ["high", "low"]) {
+    let r = await call(jsonMode, effort);
+    if (r.status === 400 && jsonMode) { jsonMode = false; r = await call(false, effort); }   // JSON mode not accepted with images
+    if (r.status === 401) throw new Error("La clave de DeepSeek no es válida. Revisa DEEPSEEK_API_KEY en Supabase.");
+    if (r.status === 402) throw new Error("Tu cuenta de DeepSeek no tiene saldo. Recarga en platform.deepseek.com.");
+    if (r.status === 429) throw Object.assign(new Error("Se hicieron muchas lecturas seguidas. Espera un minuto y vuelve a intentar."), { status: 429 });
+    if (!r.ok) throw new Error(`DeepSeek respondió ${r.status}. Intenta de nuevo en un momento.`);
+    out = await r.json();
+    if (out.choices?.[0]?.finish_reason !== "length") break;
+    if (Date.now() - started > 70_000) break;   // no time left for a second try inside the function's limit
+    console.warn("read-sheet: DeepSeek ran out of tokens, retrying with less reasoning");
+  }
   const text = out.choices?.[0]?.message?.content ?? "";
-  if (out.choices?.[0]?.finish_reason === "length") throw new Error("La lectura de DeepSeek quedó cortada. Sube la foto otra vez.");
+  if (out.choices?.[0]?.finish_reason === "length") throw new Error("La lectura de DeepSeek quedó cortada. Prueba con una foto que muestre solo la hoja, bien derecha.");
   const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
   try { return JSON.parse(json); }
   catch { throw new Error("DeepSeek no devolvió los datos en el formato esperado. Sube la foto otra vez."); }
