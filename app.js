@@ -135,6 +135,7 @@ async function writeTruck(id, data){
 // ---------- monthly log ----------
 function renderLog(){
   const box=$('#logBody'), t=S.trucks[S.truckId];
+  $('#clrLog').hidden = !t || !S.canWrite;
   if (!t) { box.innerHTML=`<div class="empty"><b>Sin camiones todavía</b>Agrega tu primer camión en la pestaña Camiones para empezar la bitácora.</div>`; $('#logTiles').innerHTML=''; S.logKey=''; return; }
   const key=S.truckId+'|'+S.month+'|'+S.canWrite;
   if (key!==S.logKey) {
@@ -1371,8 +1372,9 @@ document.querySelectorAll('nav.tabs button').forEach(b=>b.addEventListener('clic
 $('#truckSel').addEventListener('change',e=>{ S.truckId=e.target.value; S.tdDirty=false; subscribeEntries(); refreshAll(); });
 $('#todayForm').addEventListener('submit', saveToday);
 $('#impFile').addEventListener('change', e=>{ addFiles([...e.target.files]); e.target.value=''; });
-try { const eng=localStorage.getItem('bc.reader'); if (eng && [...$('#impEngine').options].some(o=>o.value===eng)) $('#impEngine').value=eng; } catch(e){}
-$('#impEngine').addEventListener('change', e=>{ try { localStorage.setItem('bc.reader', e.target.value); } catch(_){} });
+// key bumped when PaddleOCR became the default, so an older saved choice doesn't override it
+try { const eng=localStorage.getItem('bc.reader2'); if (eng && [...$('#impEngine').options].some(o=>o.value===eng)) $('#impEngine').value=eng; } catch(e){}
+$('#impEngine').addEventListener('change', e=>{ try { localStorage.setItem('bc.reader2', e.target.value); } catch(_){} });
 ['dragenter','dragover'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.add('over'); }));
 ['dragleave','drop'].forEach(ev=>$('#impDrop').addEventListener(ev, e=>{ e.preventDefault(); $('#impDrop').classList.remove('over'); }));
 $('#impDrop').addEventListener('drop', e=>{ if (e.dataTransfer?.files?.length) addFiles([...e.dataTransfer.files]); });
@@ -1426,6 +1428,17 @@ $('#dlLog').addEventListener('click',()=>{ const t=S.trucks[S.truckId]; if(!t) r
   const pdf=makePdf(()=>logPdf(t,y,m)); if (pdf) offer(`Monthly-Log-Truck${t.number}-${MONTH[m-1]}-${y}.pdf`, pdf); });
 $('#csvLog').addEventListener('click',()=>{ const t=S.trucks[S.truckId]; if(!t) return; const [y,m]=S.month.split('-').map(Number);
   offer(`Log-Truck${t.number}-${y}-${pad(m)}.csv`, csvFor(t.id,`${y}-${pad(m)}-01`,`${y}-${pad(m)}-31`)); });
+// wipe one month of one truck (days, month totals, uploaded-photo fingerprints) so its sheet can be uploaded again
+$('#clrLog').addEventListener('click', async ()=>{
+  const t=S.trucks[S.truckId]; if (!t || !S.canWrite) return;
+  const ym=S.month, [y,m]=ym.split('-').map(Number), ids=Object.keys(S.entries).filter(id=>id.startsWith(t.id+'_'+ym+'-'));
+  if (!confirm(`¿Borrar todo ${MES[m-1]} ${y} del truck #${t.number}?\n\nSe borran ${ids.length} ${ids.length===1?'día':'días'}: millas, choferes y cargas de diésel. No se puede deshacer.`)) return;
+  ids.forEach(id=>writeEntry(id, null));
+  if (S.months[t.id+'_'+ym]) writeMonth(ym, {cost:null, gal:null, price:null, miles:null});
+  if (S.db) try { for (const d of (await S.db.collection('sheets').where('truck','==',t.id).get()).docs) if (d.data().ym===ym) await S.db.collection('sheets').doc(d.id).delete(); } catch(e){}
+  toast(`${MES[m-1]} ${y} borrado del truck #${t.number}. Ya puedes subir la hoja otra vez.`);
+  S.logKey=''; later();
+});
 $('#dlRpt').addEventListener('click',()=>{ const t=S.trucks[S.truckId]; if(!t) return;
   const pdf=makePdf(()=>quarterPdf(t,S.year,S.q)); if (pdf) offer(`Fuel-Taxes-Q${S.q}-${S.year}-Truck${t.number}.pdf`, pdf); });
 $('#csvRpt').addEventListener('click',()=>{ const t=S.trucks[S.truckId]; if(!t) return; const m0=3*S.q-2;

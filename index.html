@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Kalam:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 <div id="authScreen" class="auth" hidden>
@@ -85,6 +85,7 @@
       <label class="fld" for="monthSel">Mes<input type="month" id="monthSel"></label>
       <button class="btn" id="dlLog">Descargar hoja (PDF)</button>
       <button class="btn" id="csvLog">Exportar CSV</button>
+      <button class="btn danger" id="clrLog" hidden>Borrar mes</button>
     </div>
     <div id="logTiles"></div>
     <div id="logBody"></div>
@@ -107,8 +108,8 @@
     <div id="impOff" class="banner" hidden></div>
     <div class="row">
       <label class="fld" for="impEngine">Lector de fotos<select id="impEngine">
-        <option value="deepseek" selected>DeepSeek (recomendado)</option>
-        <option value="paddle">PaddleOCR (tu servidor)</option>
+        <option value="paddle" selected>PaddleOCR (tu servidor)</option>
+        <option value="deepseek">DeepSeek</option>
         <option value="compare">Comparar DeepSeek y PaddleOCR</option>
         <option value="ocr">OCR.space</option>
       </select></label>
@@ -155,6 +156,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="app.js?v=20"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>

@@ -42,6 +42,7 @@ nav.tabs button{font-family:var(--f-display);font-size:17px;font-weight:600;lett
 nav.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
 .btn{font:inherit;font-weight:600;border-radius:4px;padding:7px 12px;cursor:pointer;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .banner{padding:10px 12px;border-radius:4px;background:var(--warn-bg);color:var(--warn);margin-bottom:12px;font-weight:500}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:16px}
