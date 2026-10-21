@@ -243,12 +243,11 @@ function quarterReport(t,y,q){
     if (!st.fuel.length && st.manualFuel) {
       h+=`<table><thead><tr><th>Date</th><th class="n">Fueling price</th><th class="n">Fueling gallons</th><th class="n">Price per gallon</th></tr></thead><tbody>
         <tr class="tot"><td>TOTAL</td><td class="n">${fMoney(st.cost)}</td><td class="n">${fGal(st.gal)}</td><td class="n">${avgOf(st)!=null?fPrice(avgOf(st)):''}</td></tr></tbody></table>
-        <div class="meta">Miles driven: <b>${fOdo(st.miles)}</b>${st.mpg?` · MPG: <b>${st.mpg.toFixed(2)}</b>`:''}</div>`; continue; }
+`; continue; }
     if (!st.fuel.length) { h+=`<p class="meta">No fueling recorded.</p>`; continue; }
     h+=`<table><thead><tr><th>Date</th><th class="n">Fueling price</th><th class="n">Fueling gallons</th><th class="n">Price per gallon</th></tr></thead><tbody>`;
     for (const f of st.fuel) h+=`<tr><td>${usDate(f.date)}</td><td class="n">${fMoney(f.cost)}</td><td class="n">${fGal(f.gal)}</td><td class="n">${fPrice(f.price)}</td></tr>`;
-    h+=`<tr class="tot"><td>TOTAL</td><td class="n">${fMoney(st.cost)}</td><td class="n">${fGal(st.gal)}</td><td class="n">${fPrice(avgOf(st))}</td></tr></tbody></table>
-      <div class="meta">Miles driven: <b>${fOdo(st.miles)}</b>${st.mpg?` · MPG: <b>${st.mpg.toFixed(2)}</b>`:''}</div>`;
+    h+=`<tr class="tot"><td>TOTAL</td><td class="n">${fMoney(st.cost)}</td><td class="n">${fGal(st.gal)}</td><td class="n">${fPrice(avgOf(st))}</td></tr></tbody></table>`;
   }
   h+=quarterTail(t,y,q,sts,false)+`<p class="meta">Price per gallon: ${S.avg==='simple'?'simple average of fueling prices':'total cost ÷ total gallons'}.</p></div>`;
   return h;
@@ -301,9 +300,17 @@ function quarterPdf(t,y,q){
   const sts=months.map(m=>({m,st:monthStats(t.id,y,m)})), qo=quarterOdo(t.id,y,q);
   P.center(`${QN[q]} QUARTER FUEL TAXES, ${MONTH[last-1]} ${y}`,13,true);
   P.center(`${(t.model||'TRUCK #'+t.number).toUpperCase()} MILES`,12,true);
-  P.center(`${t.company?t.company+'  -  ':''}${vehicleLine(t).replace(/ · /g,'  -  ')}`,9);
   P.Y+=4;
   const cols={1:RIGHT,2:RIGHT,3:RIGHT};
+  // like the accountant's sheet: cost "$" at the left of its cell, amount on the right; price per gallon "$ 4.999"
+  const money=d=>{ if (d.section==='head') return;
+    if (d.column.index===1) d.cell.text=d.cell.text.map(s=>s.replace(/^\$/,''));
+    if (d.column.index===3) d.cell.text=d.cell.text.map(s=>s.replace(/^\$/,'$ ')); };
+  const dollar=d=>{ if (d.section==='head' || d.column.index!==1 || !String(d.cell.raw).startsWith('$')) return;
+    const s=d.cell.styles, pt=(typeof s.cellPadding==='object'?s.cellPadding.top:s.cellPadding)||0;
+    P.doc.setFont('helvetica',s.fontStyle); P.doc.setFontSize(s.fontSize); P.doc.setTextColor(17);
+    P.doc.text('$', d.cell.x+24, d.cell.y+pt+s.fontSize*.85); };
+  const weekOf=iso=>{ const d=new Date(iso+'T12:00'); d.setDate(d.getDate()-d.getDay()); return d.toDateString(); };   // weeks start on Sunday
   for (const {m,st} of sts) {
     P.room(80);
     P.Y+=8; P.center(`${MONTH[m-1]} ${y}, FUELING COST AND GALLONS`,11.5,true);
@@ -311,8 +318,12 @@ function quarterPdf(t,y,q){
     P.table({head:[['DATE','FUELING PRICE','FUELING GALLONS','PRICE PER GALLON']], columnStyles:cols,
       body: st.fuel.map(f=>[usDate(f.date),fMoney(f.cost),fGal(f.gal),fPrice(f.price)]),
       foot:[['TOTAL',fMoney(st.cost),fGal(st.gal),avgOf(st)!=null?fPrice(avgOf(st)):'']],
-      headStyles:{fontStyle:'bold',fontSize:8.5,halign:'right'}, didParseCell:d=>{ if (d.column.index===0) d.cell.styles.halign='left'; else if (d.section!=='body') d.cell.styles.halign='right'; }});
-    P.note(`Miles driven: ${st.miles?fOdo(st.miles):'-'}${st.mpg?'   |   MPG: '+st.mpg.toFixed(2):''}`);
+      headStyles:{fontStyle:'bold',fontSize:8.5,halign:'right'},
+      didParseCell:d=>{ if (d.column.index===0) d.cell.styles.halign='left'; else if (d.section!=='body') d.cell.styles.halign='right';
+        money(d);
+        const i=d.row.index;   // a little space before each new week
+        if (d.section==='body' && i>0 && weekOf(st.fuel[i].date)!==weekOf(st.fuel[i-1].date)) d.cell.styles.cellPadding={top:11,bottom:2.5,left:5,right:5}; },
+      didDrawCell:dollar});
   }
   // quarter miles = closing - opening odometer
   const T={cost:0,gal:0,miles:0,avgs:[]};
@@ -326,9 +337,11 @@ function quarterPdf(t,y,q){
     body:[[qo.endDate?usDate(qo.endDate):'',fOdo(qo.end),''],[qo.startDate?usDate(qo.startDate):'',fOdo(qo.start),'']],
     foot:[['TOTAL',qo.miles!=null?fOdo(qo.miles):'-',fMoney(T.cost)]]});
   P.room(130); P.Y+=8; P.center(`${QN[q]} QUARTER TOTAL FUELING COST AND GALLONS`,11.5,true);
-  P.table({head:[['MONTH','FUELING COST','FUELING GALLONS','PRICE PER GALLON','MILES','MPG']], didParseCell:align,
-    body: sts.map(({m,st})=>[MONTH[m-1],fMoney(st.cost),fGal(st.gal),avgOf(st)!=null?fPrice(avgOf(st)):'-',st.miles?fOdo(st.miles):'-',st.mpg?st.mpg.toFixed(2):'-']),
-    foot:[['TOTAL',fMoney(T.cost),fGal(T.gal),tAvg!=null?fPrice(tAvg):'-',qMiles?fOdo(qMiles):'-',T.gal&&qMiles?(qMiles/T.gal).toFixed(2):'-']]});
+  P.table({head:[['MONTH','FUELING COST','FUELING GALLONS','PRICE PER GALLON']],
+    didParseCell:d=>{ align(d); money(d); },
+    didDrawCell:dollar,
+    body: sts.map(({m,st})=>[MONTH[m-1],fMoney(st.cost),fGal(st.gal),avgOf(st)!=null?fPrice(avgOf(st)):'-']),
+    foot:[['TOTAL',fMoney(T.cost),fGal(T.gal),tAvg!=null?fPrice(tAvg):'-']]});
   P.note(`Quarter miles = closing odometer - opening odometer.  Price per gallon: ${S.avg==='simple'?'simple average of fueling prices':'total cost / total gallons'}.`);
   P.footer();
   return P.doc;
@@ -427,7 +440,6 @@ function quarterEdit(t,y,q){
     h+=`</tbody></table><div class="meta">Miles driven: `;
     h+= st.odoMiles ? `<b>${fOdo(st.miles)}</b> <span class="mhint">(de la bitácora)</span>`
       : `<span data-man="${ym}">${inp(`m-${ym}-miles`,man.miles!=null?fOdo(man.miles):'','n mi" data-k="miles','millas')}</span>`;
-    h+= st.mpg ? ` · MPG: <b>${st.mpg.toFixed(2)}</b>` : '';
     h+=`</div>`;
   }
   h+=quarterTail(t,y,q,sts,true)+`</div>`;
@@ -454,11 +466,11 @@ function quarterTail(t,y,q,sts,edit){
     <tr>${cell('start')}<td></td></tr>
     <tr class="tot"><td>TOTAL</td><td class="n">${qo.miles!=null?fOdo(qo.miles):'—'}</td><td class="n">${fMoney(T.cost)}</td></tr></tbody></table>`;
   if (edit && qo.miles!=null && qo.miles<0) h+=`<p class="meta flag">El odómetro final es menor que el inicial.</p>`;
-  h+=`<h3>${QN[q]} QUARTER TOTAL FUELING COST AND GALLONS</h3><table><thead><tr><th>Month</th><th class="n">Fueling cost</th><th class="n">Fueling gallons</th><th class="n">Price per gallon</th><th class="n">Miles</th><th class="n">MPG</th></tr></thead><tbody>`;
+  h+=`<h3>${QN[q]} QUARTER TOTAL FUELING COST AND GALLONS</h3><table><thead><tr><th>Month</th><th class="n">Fueling cost</th><th class="n">Fueling gallons</th><th class="n">Price per gallon</th></tr></thead><tbody>`;
   for (const {m,st} of sts)
-    h+=`<tr><td>${MONTH[m-1]}</td><td class="n">${fMoney(st.cost)}</td><td class="n">${fGal(st.gal)}</td><td class="n">${avgOf(st)!=null?fPrice(avgOf(st)):'—'}</td><td class="n">${st.miles?fOdo(st.miles):'—'}</td><td class="n">${st.mpg?st.mpg.toFixed(2):'—'}</td></tr>`;
+    h+=`<tr><td>${MONTH[m-1]}</td><td class="n">${fMoney(st.cost)}</td><td class="n">${fGal(st.gal)}</td><td class="n">${avgOf(st)!=null?fPrice(avgOf(st)):'—'}</td></tr>`;
   const tAvg = S.avg==='simple' ? (T.avgs.length?T.avgs.reduce((a,b)=>a+b,0)/T.avgs.length:null) : (T.gal?T.cost/T.gal:null);
-  h+=`<tr class="tot"><td>TOTAL</td><td class="n">${fMoney(T.cost)}</td><td class="n">${fGal(T.gal)}</td><td class="n">${tAvg!=null?fPrice(tAvg):'—'}</td><td class="n">${qMiles?fOdo(qMiles):'—'}</td><td class="n">${T.gal&&qMiles?(qMiles/T.gal).toFixed(2):'—'}</td></tr></tbody></table>`;
+  h+=`<tr class="tot"><td>TOTAL</td><td class="n">${fMoney(T.cost)}</td><td class="n">${fGal(T.gal)}</td><td class="n">${tAvg!=null?fPrice(tAvg):'—'}</td></tr></tbody></table>`;
   if (qo.miles!=null) h+=`<p class="meta">Quarter miles = closing odometer − opening odometer${qo.miles!==T.miles && T.miles?` (monthly logs add up to ${fOdo(T.miles)})`:''}.</p>`;
   return h;
 }
